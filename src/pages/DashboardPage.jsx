@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { getTodayBids } from "../services/bidsService";
 import { syncPncBids } from "../services/pncpService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
+import { getActiveKeywords } from "../services/settingsService";
 
 function dateToBrazilian(dateLike) {
   return new Intl.DateTimeFormat("pt-BR", {
@@ -17,6 +19,8 @@ export default function DashboardPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState([]);
+  const [period, setPeriod] = useState("hoje");
+  const [category, setCategory] = useState("todas");
 
   useEffect(() => {
     async function loadData() {
@@ -49,7 +53,8 @@ export default function DashboardPage() {
       setIsSyncing(true);
       setError("");
       setWarnings([]);
-      const result = await syncPncBids();
+      const customKeywords = await getActiveKeywords().catch(() => []);
+      const result = await syncPncBids(customKeywords);
       if (result.warnings?.length) {
         setWarnings(result.warnings);
       }
@@ -67,6 +72,23 @@ export default function DashboardPage() {
     await supabase.auth.signOut();
     window.location.href = "/";
   }
+
+  const filteredBids = useMemo(() => {
+    let result = [...bids];
+
+    if (period !== "hoje") {
+      const days = period === "7dias" ? 7 : 30;
+      const start = new Date();
+      start.setDate(start.getDate() - days);
+      result = result.filter((item) => new Date(item.published_date) >= start);
+    }
+
+    if (category !== "todas") {
+      result = result.filter((item) => item.status === category);
+    }
+
+    return result;
+  }, [bids, period, category]);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-brand-sand via-[#FFFDFB] to-[#F2F8F9] px-6 py-8">
@@ -109,6 +131,34 @@ export default function DashboardPage() {
           </article>
         </section>
 
+        <section className="grid gap-3 rounded-2xl border border-brand-brown/10 bg-white p-4 shadow-panel md:grid-cols-2">
+          <label className="font-body text-sm text-brand-ink">
+            Periodo
+            <select
+              value={period}
+              onChange={(event) => setPeriod(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-brand-brown/20 px-3 py-2"
+            >
+              <option value="hoje">Hoje</option>
+              <option value="7dias">Ultimos 7 dias</option>
+              <option value="30dias">Ultimos 30 dias</option>
+            </select>
+          </label>
+          <label className="font-body text-sm text-brand-ink">
+            Categoria
+            <select
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-brand-brown/20 px-3 py-2"
+            >
+              <option value="todas">Todas</option>
+              <option value="em_analise">Em analise</option>
+              <option value="favoritado">Favoritadas</option>
+              <option value="rejeitado">Rejeitadas</option>
+            </select>
+          </label>
+        </section>
+
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-5 shadow-panel">
           {isLoading && <p className="font-body text-brand-ink/80">Carregando editais...</p>}
           {error && <p className="font-body text-sm text-red-700">{error}</p>}
@@ -118,17 +168,20 @@ export default function DashboardPage() {
             </p>
           )}
 
-          {!isLoading && !error && bids.length === 0 && (
+          {!isLoading && !error && filteredBids.length === 0 && (
             <p className="font-body text-brand-ink/80">Nenhum edital novo encontrado para hoje.</p>
           )}
 
-          {!isLoading && bids.length > 0 && (
+          {!isLoading && filteredBids.length > 0 && (
             <ul className="space-y-4">
-              {bids.map((bid) => (
-                <li key={bid.id} className="rounded-xl border border-brand-brown/10 p-4">
+              {filteredBids.map((bid) => (
+                <li key={bid.id} className="rounded-xl border border-brand-brown/10 p-4 transition hover:bg-brand-sand/40">
                   <h3 className="font-heading text-lg text-brand-brown">{bid.title}</h3>
                   <p className="mt-1 font-body text-sm text-brand-ink/80">{bid.organization_name || "Orgao nao informado"}</p>
                   <p className="mt-1 font-body text-xs text-brand-ink/60">Publicado em: {dateToBrazilian(bid.published_date)}</p>
+                  <Link to={`/bids/${bid.id}`} className="mt-2 inline-block font-body text-xs text-brand-cyan underline underline-offset-4">
+                    Abrir detalhes do edital
+                  </Link>
                 </li>
               ))}
             </ul>

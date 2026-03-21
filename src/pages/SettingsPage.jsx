@@ -1,70 +1,45 @@
 import { useEffect, useState } from "react";
-import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
-
-const STORAGE_KEY = "licitae-settings-keywords";
+import { loadSystemSettings, saveSystemSettings } from "../services/settingsService";
 
 export default function SettingsPage() {
   const [keywords, setKeywords] = useState("Processos Participativos, CLPI, Diagnostico Socioambiental");
   const [cnaes, setCnaes] = useState("7320-3/00, 7220-7/00");
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const cached = localStorage.getItem(STORAGE_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      setKeywords(parsed.keywords || "");
-      setCnaes(parsed.cnaes || "");
-    }
-
-    const supabase = getSupabaseClientOrThrow();
-    supabase.auth.getUser().then(async ({ data }) => {
-      const userId = data.user?.id;
-      if (!userId) return;
-
-      const { data: row } = await supabase
-        .from("notifications")
-        .select("email_notifications")
-        .eq("user_id", userId)
-        .maybeSingle();
-
-      if (row?.email_notifications !== undefined) {
-        setEmailNotifications(Boolean(row.email_notifications));
-      }
-    });
+    loadSystemSettings()
+      .then((data) => {
+        if (data.keywords) setKeywords(data.keywords);
+        if (data.cnaes) setCnaes(data.cnaes);
+        setEmailNotifications(Boolean(data.emailNotifications));
+      })
+      .catch((err) => {
+        setError(err.message || "Falha ao carregar configuracoes.");
+      });
   }, []);
 
   async function handleSave(event) {
     event.preventDefault();
     setMessage("");
+    setError("");
+    setIsSaving(true);
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        keywords,
-        cnaes
-      })
-    );
-
-    const supabase = getSupabaseClientOrThrow();
-    const { data } = await supabase.auth.getUser();
-    const userId = data.user?.id;
-
-    if (userId) {
-      await supabase.from("notifications").upsert(
-        [
-          {
-            user_id: userId,
-            email_notifications: emailNotifications,
-            channel: "email"
-          }
-        ],
-        { onConflict: "user_id" }
-      );
+    try {
+      await saveSystemSettings({
+        keywordsText: keywords,
+        cnaesText: cnaes,
+        emailNotifications
+      });
+      setMessage("Configuracoes salvas com sucesso.");
+    } catch (err) {
+      setError(err.message || "Falha ao salvar configuracoes.");
+    } finally {
+      setIsSaving(false);
     }
-
-    setMessage("Configuracoes salvas com sucesso.");
   }
 
   return (
@@ -104,10 +79,14 @@ export default function SettingsPage() {
             Receber notificacoes por e-mail
           </label>
 
-          <button className="rounded-xl bg-brand-cyan px-5 py-3 font-heading text-sm font-semibold uppercase tracking-wider text-white">
-            Salvar configuracoes
+          <button
+            disabled={isSaving}
+            className="rounded-xl bg-brand-cyan px-5 py-3 font-heading text-sm font-semibold uppercase tracking-wider text-white disabled:opacity-60"
+          >
+            {isSaving ? "Salvando..." : "Salvar configuracoes"}
           </button>
           {message && <p className="font-body text-sm text-emerald-700">{message}</p>}
+          {error && <p className="font-body text-sm text-red-700">{error}</p>}
         </form>
       </div>
     </main>

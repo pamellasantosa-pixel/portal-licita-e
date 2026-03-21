@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
+import { uploadDocumentFile } from "../services/documentsService";
 
 function daysUntil(dateLike) {
   if (!dateLike) return null;
@@ -19,6 +20,8 @@ export default function DocumentsPage() {
   const [fileUrl, setFileUrl] = useState("");
   const [fileType, setFileType] = useState("pdf");
   const [expirationDate, setExpirationDate] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function loadDocuments() {
     try {
@@ -47,12 +50,26 @@ export default function DocumentsPage() {
     event.preventDefault();
 
     try {
+      setIsSubmitting(true);
       const supabase = getSupabaseClientOrThrow();
+      let finalFileUrl = fileUrl;
+      let finalFileType = fileType;
+
+      if (selectedFile) {
+        const uploaded = await uploadDocumentFile({ file: selectedFile });
+        finalFileUrl = uploaded.fileUrl;
+        finalFileType = uploaded.fileType;
+      }
+
+      if (!finalFileUrl) {
+        throw new Error("Informe uma URL ou selecione um arquivo para upload.");
+      }
+
       const { error: insertError } = await supabase.from("documents").insert([
         {
           name,
-          file_url: fileUrl,
-          file_type: fileType,
+          file_url: finalFileUrl,
+          file_type: finalFileType,
           expiration_date: expirationDate || null
         }
       ]);
@@ -63,9 +80,12 @@ export default function DocumentsPage() {
       setFileUrl("");
       setFileType("pdf");
       setExpirationDate("");
+      setSelectedFile(null);
       await loadDocuments();
     } catch (err) {
       setError(err.message || "Falha ao salvar documento.");
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -97,8 +117,12 @@ export default function DocumentsPage() {
             <input
               value={fileUrl}
               onChange={(event) => setFileUrl(event.target.value)}
-              placeholder="URL do arquivo"
-              required
+              placeholder="URL do arquivo (opcional se fizer upload)"
+              className="w-full rounded-xl border border-brand-brown/20 px-4 py-3 font-body outline-none ring-brand-cyan transition focus:ring-2"
+            />
+            <input
+              type="file"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
               className="w-full rounded-xl border border-brand-brown/20 px-4 py-3 font-body outline-none ring-brand-cyan transition focus:ring-2"
             />
             <div className="grid gap-3 md:grid-cols-2">
@@ -118,8 +142,11 @@ export default function DocumentsPage() {
                 className="rounded-xl border border-brand-brown/20 px-4 py-3 font-body outline-none ring-brand-cyan transition focus:ring-2"
               />
             </div>
-            <button className="rounded-xl bg-brand-cyan px-5 py-3 font-heading text-sm font-semibold uppercase tracking-wider text-white">
-              Novo Upload
+            <button
+              disabled={isSubmitting}
+              className="rounded-xl bg-brand-cyan px-5 py-3 font-heading text-sm font-semibold uppercase tracking-wider text-white disabled:opacity-60"
+            >
+              {isSubmitting ? "Enviando..." : "Novo Upload"}
             </button>
           </form>
 

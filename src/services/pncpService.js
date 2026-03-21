@@ -1,10 +1,12 @@
 import { NICHE_KEYWORDS } from "../config/constants";
 
-export async function syncPncBids() {
+export async function syncPncBids(customKeywords = null) {
+  const keywords = customKeywords?.length ? customKeywords : NICHE_KEYWORDS;
+
   const response = await fetch("/api/pncp-search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keywords: NICHE_KEYWORDS })
+    body: JSON.stringify({ keywords })
   });
 
   if (!response.ok) {

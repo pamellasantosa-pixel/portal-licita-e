@@ -127,6 +127,16 @@ export default function BidDetailsPage() {
         </section>
 
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
+          <h2 className="font-heading text-2xl text-brand-brown">Visualizador de PDF</h2>
+          {!bid.source_url && <p className="mt-2 font-body text-brand-ink/80">Este edital nao possui documento associado.</p>}
+          {bid.source_url && (
+            <div className="mt-3 overflow-hidden rounded-xl border border-brand-brown/10">
+              <iframe title="PDF do edital" src={bid.source_url} className="h-[560px] w-full" />
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
           <h2 className="font-heading text-2xl text-brand-brown">Analise da IA</h2>
           {!analysisRaw && <p className="mt-2 font-body text-brand-ink/80">Nenhuma analise gerada ainda.</p>}
           {analysisRaw && (

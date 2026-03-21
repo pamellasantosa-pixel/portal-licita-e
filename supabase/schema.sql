@@ -53,10 +53,28 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.company_cnae (
+  id uuid primary key default gen_random_uuid(),
+  cnae_code text not null unique,
+  cnae_description text,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.manual_alerts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  event_date timestamptz not null,
+  description text not null,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists idx_bids_published_date on public.bids (published_date desc);
 create index if not exists idx_bids_status on public.bids (status);
 create index if not exists idx_documents_expiration_date on public.documents (expiration_date);
 create index if not exists idx_bid_filters_active on public.bid_filters (is_active);
+create index if not exists idx_manual_alerts_user_event on public.manual_alerts (user_id, event_date);
+create unique index if not exists idx_notifications_unique_user on public.notifications (user_id);
 
 create or replace function public.set_updated_at()
 returns trigger as $$
@@ -89,6 +107,8 @@ alter table public.bid_filters enable row level security;
 alter table public.bids enable row level security;
 alter table public.documents enable row level security;
 alter table public.notifications enable row level security;
+alter table public.company_cnae enable row level security;
+alter table public.manual_alerts enable row level security;
 
 drop policy if exists "authenticated can read bid_filters" on public.bid_filters;
 create policy "authenticated can read bid_filters"
@@ -116,3 +136,52 @@ on public.documents for all
 to authenticated
 using (true)
 with check (true);
+
+drop policy if exists "authenticated can read company cnaes" on public.company_cnae;
+create policy "authenticated can read company cnaes"
+on public.company_cnae for select
+to authenticated
+using (true);
+
+drop policy if exists "authenticated can manage company cnaes" on public.company_cnae;
+create policy "authenticated can manage company cnaes"
+on public.company_cnae for all
+to authenticated
+using (true)
+with check (true);
+
+drop policy if exists "authenticated can manage own manual alerts" on public.manual_alerts;
+create policy "authenticated can manage own manual alerts"
+on public.manual_alerts for all
+to authenticated
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+insert into storage.buckets (id, name, public)
+values ('documents', 'documents', true)
+on conflict (id) do nothing;
+
+drop policy if exists "authenticated can upload documents bucket" on storage.objects;
+create policy "authenticated can upload documents bucket"
+on storage.objects for insert
+to authenticated
+with check (bucket_id = 'documents');
+
+drop policy if exists "authenticated can read documents bucket" on storage.objects;
+create policy "authenticated can read documents bucket"
+on storage.objects for select
+to authenticated
+using (bucket_id = 'documents');
+
+drop policy if exists "authenticated can update own documents bucket" on storage.objects;
+create policy "authenticated can update own documents bucket"
+on storage.objects for update
+to authenticated
+using (bucket_id = 'documents' and owner = auth.uid())
+with check (bucket_id = 'documents' and owner = auth.uid());
+
+drop policy if exists "authenticated can delete own documents bucket" on storage.objects;
+create policy "authenticated can delete own documents bucket"
+on storage.objects for delete
+to authenticated
+using (bucket_id = 'documents' and owner = auth.uid());

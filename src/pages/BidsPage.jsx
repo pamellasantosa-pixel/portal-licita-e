@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { getAllBids } from "../services/bidsService";
 import { syncPncBids } from "../services/pncpService";
 import MainNav from "../components/MainNav";
+import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -13,6 +14,11 @@ export default function BidsPage() {
   const [bids, setBids] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("todos");
+  const [period, setPeriod] = useState("todos");
+  const [keywordFilter, setKeywordFilter] = useState("todos");
+  const [cnaeFilter, setCnaeFilter] = useState("todos");
+  const [availableKeywords, setAvailableKeywords] = useState([]);
+  const [availableCnaes, setAvailableCnaes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState("");
@@ -33,6 +39,8 @@ export default function BidsPage() {
 
   useEffect(() => {
     loadBids();
+    getActiveKeywords().then(setAvailableKeywords).catch(() => setAvailableKeywords([]));
+    getActiveCnaes().then(setAvailableCnaes).catch(() => setAvailableCnaes([]));
   }, []);
 
   async function handleSync() {
@@ -40,7 +48,8 @@ export default function BidsPage() {
       setIsSyncing(true);
       setWarnings([]);
       setError("");
-      const result = await syncPncBids();
+      const customKeywords = await getActiveKeywords().catch(() => []);
+      const result = await syncPncBids(customKeywords);
       if (result.warnings?.length) {
         setWarnings(result.warnings);
       }
@@ -56,9 +65,21 @@ export default function BidsPage() {
     return bids.filter((item) => {
       const matchesSearch = `${item.title} ${item.organization_name || ""}`.toLowerCase().includes(search.toLowerCase());
       const matchesStatus = status === "todos" || item.status === status;
-      return matchesSearch && matchesStatus;
+      const matchesKeyword =
+        keywordFilter === "todos" || `${item.title} ${item.organization_name || ""}`.toLowerCase().includes(keywordFilter.toLowerCase());
+      const matchesCnae = cnaeFilter === "todos" || `${item.title} ${item.organization_name || ""}`.includes(cnaeFilter);
+
+      let matchesPeriod = true;
+      if (period !== "todos") {
+        const days = period === "7dias" ? 7 : 30;
+        const from = new Date();
+        from.setDate(from.getDate() - days);
+        matchesPeriod = new Date(item.published_date) >= from;
+      }
+
+      return matchesSearch && matchesStatus && matchesPeriod && matchesKeyword && matchesCnae;
     });
-  }, [bids, search, status]);
+  }, [bids, search, status, period, keywordFilter, cnaeFilter]);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-brand-sand via-[#FFFDFB] to-[#F2F8F9] px-6 py-8">
@@ -78,7 +99,7 @@ export default function BidsPage() {
           </button>
         </header>
 
-        <section className="grid gap-3 rounded-2xl border border-brand-brown/10 bg-white p-4 shadow-panel md:grid-cols-[1fr_220px]">
+        <section className="grid gap-3 rounded-2xl border border-brand-brown/10 bg-white p-4 shadow-panel md:grid-cols-2 lg:grid-cols-3">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -94,6 +115,39 @@ export default function BidsPage() {
             <option value="em_analise">Em analise</option>
             <option value="favoritado">Favoritado</option>
             <option value="rejeitado">Rejeitado</option>
+          </select>
+          <select
+            value={period}
+            onChange={(event) => setPeriod(event.target.value)}
+            className="rounded-xl border border-brand-brown/20 px-3 py-3 font-body outline-none ring-brand-cyan transition focus:ring-2"
+          >
+            <option value="todos">Periodo: todos</option>
+            <option value="7dias">Periodo: ultimos 7 dias</option>
+            <option value="30dias">Periodo: ultimos 30 dias</option>
+          </select>
+          <select
+            value={keywordFilter}
+            onChange={(event) => setKeywordFilter(event.target.value)}
+            className="rounded-xl border border-brand-brown/20 px-3 py-3 font-body outline-none ring-brand-cyan transition focus:ring-2"
+          >
+            <option value="todos">Keyword: todas</option>
+            {availableKeywords.map((keyword) => (
+              <option key={keyword} value={keyword}>
+                {keyword}
+              </option>
+            ))}
+          </select>
+          <select
+            value={cnaeFilter}
+            onChange={(event) => setCnaeFilter(event.target.value)}
+            className="rounded-xl border border-brand-brown/20 px-3 py-3 font-body outline-none ring-brand-cyan transition focus:ring-2"
+          >
+            <option value="todos">CNAE: todos</option>
+            {availableCnaes.map((cnae) => (
+              <option key={cnae} value={cnae}>
+                {cnae}
+              </option>
+            ))}
           </select>
         </section>
 

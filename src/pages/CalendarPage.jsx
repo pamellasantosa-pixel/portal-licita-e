@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { getAllBids } from "../services/bidsService";
 import { useEffect } from "react";
 import MainNav from "../components/MainNav";
+import { createManualAlert, deleteManualAlert, getManualAlerts } from "../services/manualAlertsService";
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
@@ -14,9 +15,12 @@ export default function CalendarPage() {
   const [manualAlerts, setManualAlerts] = useState([]);
   const [alertDate, setAlertDate] = useState("");
   const [alertDescription, setAlertDescription] = useState("");
+  const [error, setError] = useState("");
+  const [viewMode, setViewMode] = useState("monthly");
 
   useEffect(() => {
     getAllBids().then(setBids).catch(() => setBids([]));
+    getManualAlerts().then(setManualAlerts).catch(() => setManualAlerts([]));
   }, []);
 
   const events = useMemo(() => {
@@ -33,19 +37,49 @@ export default function CalendarPage() {
       type: "Alerta manual",
       date: item.event_date,
       title: item.description,
-      id: `manual-${idx}`
+      id: item.id || `manual-${idx}`,
+      isManual: true
     }));
 
-    return [...bidEvents, ...customEvents].sort((a, b) => new Date(a.date) - new Date(b.date));
-  }, [bids, manualAlerts]);
+    const merged = [...bidEvents, ...customEvents].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const now = new Date();
+    const days = viewMode === "weekly" ? 7 : 30;
+    const limitDate = new Date(now);
+    limitDate.setDate(now.getDate() + days);
 
-  function handleCreateAlert(event) {
+    return merged.filter((item) => {
+      const itemDate = new Date(item.date);
+      return itemDate >= now && itemDate <= limitDate;
+    });
+  }, [bids, manualAlerts, viewMode]);
+
+  async function handleCreateAlert(event) {
     event.preventDefault();
     if (!alertDate || !alertDescription) return;
 
-    setManualAlerts((prev) => [...prev, { event_date: alertDate, description: alertDescription }]);
-    setAlertDate("");
-    setAlertDescription("");
+    try {
+      setError("");
+      await createManualAlert({
+        eventDate: alertDate,
+        description: alertDescription
+      });
+      const updated = await getManualAlerts();
+      setManualAlerts(updated);
+      setAlertDate("");
+      setAlertDescription("");
+    } catch (err) {
+      setError(err.message || "Falha ao criar alerta manual.");
+    }
+  }
+
+  async function handleDeleteAlert(id) {
+    try {
+      await deleteManualAlert(id);
+      const updated = await getManualAlerts();
+      setManualAlerts(updated);
+    } catch (err) {
+      setError(err.message || "Falha ao remover alerta manual.");
+    }
   }
 
   return (
@@ -57,6 +91,26 @@ export default function CalendarPage() {
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
           <h1 className="font-heading text-3xl text-brand-brown">Calendario de Prazos</h1>
           <p className="mt-2 font-body text-brand-ink/75">Visualizacao dos prazos de fechamento e alertas manuais.</p>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => setViewMode("weekly")}
+              className={[
+                "rounded-lg px-3 py-2 font-body text-xs",
+                viewMode === "weekly" ? "bg-brand-cyan text-white" : "bg-brand-sand text-brand-brown"
+              ].join(" ")}
+            >
+              Semanal
+            </button>
+            <button
+              onClick={() => setViewMode("monthly")}
+              className={[
+                "rounded-lg px-3 py-2 font-body text-xs",
+                viewMode === "monthly" ? "bg-brand-cyan text-white" : "bg-brand-sand text-brand-brown"
+              ].join(" ")}
+            >
+              Mensal
+            </button>
+          </div>
 
           <div className="mt-5 overflow-x-auto rounded-xl border border-brand-brown/10">
             <table className="min-w-full text-left">
@@ -90,6 +144,14 @@ export default function CalendarPage() {
                           Ver edital
                         </button>
                       )}
+                      {eventItem.isManual && eventItem.id && (
+                        <button
+                          onClick={() => handleDeleteAlert(eventItem.id)}
+                          className="ml-2 rounded-lg border border-red-200 px-3 py-1 font-body text-xs text-red-700"
+                        >
+                          Excluir
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -118,6 +180,7 @@ export default function CalendarPage() {
             <button className="rounded-xl bg-brand-cyan px-5 py-3 font-heading text-sm font-semibold uppercase tracking-wider text-white">
               Criar alerta
             </button>
+            {error && <p className="font-body text-sm text-red-700">{error}</p>}
           </form>
         </section>
       </div>
