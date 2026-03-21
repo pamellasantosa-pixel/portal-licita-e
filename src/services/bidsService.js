@@ -1,6 +1,8 @@
-import { supabase } from "../lib/supabaseClient";
+import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 
 export async function getTodayBids() {
+  const supabase = getSupabaseClientOrThrow();
+
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
