@@ -4,6 +4,9 @@ import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
+const GOV_COMPRAS_FALLBACK_URL =
+  "https://www.gov.br/compras/pt-br/acesso-a-informacao/manuais/manual-fase-interna/manual-mentoria/tutorial_mentoria.pdf";
+
 function parseGeminiText(raw) {
   if (!raw) return "";
   const sanitized = raw.replace(/```json|```/g, "").trim();
@@ -11,9 +14,9 @@ function parseGeminiText(raw) {
 }
 
 function resolvePublicNoticeUrl(sourceUrl) {
-  if (!sourceUrl) return "https://www.gov.br/compras/pt-br";
+  if (!sourceUrl) return GOV_COMPRAS_FALLBACK_URL;
   if (sourceUrl.includes("pncp.gov.br/compras/")) {
-    return "https://www.gov.br/compras/pt-br";
+    return GOV_COMPRAS_FALLBACK_URL;
   }
   return sourceUrl;
 }
@@ -143,8 +146,8 @@ export default function BidDetailsPage() {
             <p className="mt-2 font-body text-brand-ink/80">
               Este edital esta com link direto indisponivel. Abra no portal oficial de compras:
               {" "}
-              <a href="https://www.gov.br/compras/pt-br" target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
-                https://www.gov.br/compras/pt-br
+              <a href={GOV_COMPRAS_FALLBACK_URL} target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
+                {GOV_COMPRAS_FALLBACK_URL}
               </a>
             </p>
           )}

@@ -48,7 +48,8 @@
 
   const summary = {
     method: "analise_heuristica_gratuita",
-    source_reference: "https://www.gov.br/compras/pt-br",
+    source_reference:
+      "https://www.gov.br/compras/pt-br/acesso-a-informacao/manuais/manual-fase-interna/manual-mentoria/tutorial_mentoria.pdf",
     is_viable: isViable,
     score,
     sinais_positivos: hits,
