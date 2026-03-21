@@ -56,9 +56,17 @@ export default function DocumentsPage() {
       let finalFileType = fileType;
 
       if (selectedFile) {
-        const uploaded = await uploadDocumentFile({ file: selectedFile });
-        finalFileUrl = uploaded.fileUrl;
-        finalFileType = uploaded.fileType;
+        try {
+          const uploaded = await uploadDocumentFile({ file: selectedFile });
+          finalFileUrl = uploaded.fileUrl;
+          finalFileType = uploaded.fileType;
+        } catch (uploadErr) {
+          const text = String(uploadErr.message || "");
+          if (!text.toLowerCase().includes("bucket") || !fileUrl) {
+            throw uploadErr;
+          }
+          // Fallback temporario: usa URL manual quando o bucket ainda nao foi provisionado.
+        }
       }
 
       if (!finalFileUrl) {

@@ -1,5 +1,16 @@
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 
+const ALERTS_FALLBACK_KEY = "licitae_manual_alerts_fallback";
+
+function loadFallback() {
+  const raw = localStorage.getItem(ALERTS_FALLBACK_KEY);
+  return raw ? JSON.parse(raw) : [];
+}
+
+function saveFallback(list) {
+  localStorage.setItem(ALERTS_FALLBACK_KEY, JSON.stringify(list));
+}
+
 export async function getManualAlerts() {
   const supabase = getSupabaseClientOrThrow();
   const {
@@ -16,7 +27,7 @@ export async function getManualAlerts() {
 
   if (error) {
     if (error.code === "42P01") {
-      return [];
+      return loadFallback();
     }
     throw new Error(`Erro ao carregar alertas manuais: ${error.message}`);
   }
@@ -44,7 +55,15 @@ export async function createManualAlert({ eventDate, description }) {
 
   if (error) {
     if (error.code === "42P01") {
-      throw new Error("Tabela manual_alerts nao encontrada. Execute o schema atualizado no Supabase e tente novamente.");
+      const fallback = loadFallback();
+      const item = {
+        id: `local-${Date.now()}`,
+        event_date: eventDate,
+        description,
+        created_at: new Date().toISOString()
+      };
+      saveFallback([...fallback, item]);
+      return;
     }
     throw new Error(`Erro ao criar alerta manual: ${error.message}`);
   }
@@ -54,6 +73,11 @@ export async function deleteManualAlert(id) {
   const supabase = getSupabaseClientOrThrow();
   const { error } = await supabase.from("manual_alerts").delete().eq("id", id);
   if (error) {
+    if (error.code === "42P01") {
+      const fallback = loadFallback().filter((item) => item.id !== id);
+      saveFallback(fallback);
+      return;
+    }
     throw new Error(`Erro ao remover alerta manual: ${error.message}`);
   }
 }
