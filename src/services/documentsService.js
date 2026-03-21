@@ -19,6 +19,9 @@ export async function uploadDocumentFile({ file, folder = "uploads" }) {
   });
 
   if (uploadError) {
+    if (String(uploadError.message || "").toLowerCase().includes("bucket not found")) {
+      throw new Error("Falha no upload: bucket 'documents' nao encontrado. Execute o schema atualizado no Supabase (storage bucket/policies).");
+    }
     throw new Error(`Falha no upload: ${uploadError.message}`);
   }
 

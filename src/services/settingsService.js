@@ -58,8 +58,15 @@ export async function saveSystemSettings({ keywordsText, cnaesText, emailNotific
     .map((item) => item.trim())
     .filter(Boolean);
 
-  await supabase.from("bid_filters").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-  await supabase.from("company_cnae").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  const { error: clearFiltersError } = await supabase.from("bid_filters").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  if (clearFiltersError) {
+    throw new Error(`Falha ao limpar filtros. Execute o schema atualizado no Supabase (RLS): ${clearFiltersError.message}`);
+  }
+
+  const { error: clearCnaeError } = await supabase.from("company_cnae").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  if (clearCnaeError && clearCnaeError.code !== "42P01") {
+    throw new Error(`Falha ao limpar CNAEs: ${clearCnaeError.message}`);
+  }
 
   if (keywords.length > 0) {
     const { error: filtersError } = await supabase.from("bid_filters").insert(
@@ -68,7 +75,7 @@ export async function saveSystemSettings({ keywordsText, cnaesText, emailNotific
         is_active: true
       }))
     );
-    if (filtersError) throw new Error(filtersError.message);
+    if (filtersError) throw new Error(`Falha ao salvar palavras-chave. Execute o schema atualizado no Supabase: ${filtersError.message}`);
   }
 
   if (cnaes.length > 0) {
@@ -79,7 +86,9 @@ export async function saveSystemSettings({ keywordsText, cnaesText, emailNotific
       })),
       { onConflict: "cnae_code" }
     );
-    if (cnaeError) throw new Error(cnaeError.message);
+    if (cnaeError && cnaeError.code !== "42P01") {
+      throw new Error(`Falha ao salvar CNAEs: ${cnaeError.message}`);
+    }
   }
 
   const { error: notificationError } = await supabase.from("notifications").upsert(
@@ -93,5 +102,5 @@ export async function saveSystemSettings({ keywordsText, cnaesText, emailNotific
     { onConflict: "user_id" }
   );
 
-  if (notificationError) throw new Error(notificationError.message);
+  if (notificationError) throw new Error(`Falha ao salvar notificacoes: ${notificationError.message}`);
 }

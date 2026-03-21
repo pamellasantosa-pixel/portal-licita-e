@@ -43,6 +43,9 @@ export async function createManualAlert({ eventDate, description }) {
   ]);
 
   if (error) {
+    if (error.code === "42P01") {
+      throw new Error("Tabela manual_alerts nao encontrada. Execute o schema atualizado no Supabase e tente novamente.");
+    }
     throw new Error(`Erro ao criar alerta manual: ${error.message}`);
   }
 }

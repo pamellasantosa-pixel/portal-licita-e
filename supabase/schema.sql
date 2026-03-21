@@ -116,6 +116,13 @@ on public.bid_filters for select
 to authenticated
 using (true);
 
+drop policy if exists "authenticated can manage bid_filters" on public.bid_filters;
+create policy "authenticated can manage bid_filters"
+on public.bid_filters for all
+to authenticated
+using (true)
+with check (true);
+
 drop policy if exists "authenticated can manage bids" on public.bids;
 create policy "authenticated can manage bids"
 on public.bids for all
