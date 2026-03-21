@@ -4,8 +4,7 @@ import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
-const GOV_COMPRAS_FALLBACK_URL =
-  "https://www.gov.br/compras/pt-br/acesso-a-informacao/manuais/manual-fase-interna/manual-mentoria/tutorial_mentoria.pdf";
+const GOV_COMPRAS_BASE_URL = "https://www.gov.br/compras/pt-br";
 
 function parseGeminiText(raw) {
   if (!raw) return "";
@@ -13,17 +12,29 @@ function parseGeminiText(raw) {
   return sanitized;
 }
 
-function resolvePublicNoticeUrl(sourceUrl) {
-  if (!sourceUrl) return GOV_COMPRAS_FALLBACK_URL;
-  if (sourceUrl.includes("pncp.gov.br/compras/")) {
-    return GOV_COMPRAS_FALLBACK_URL;
-  }
-  return sourceUrl;
+function buildGovComprasSearchUrl(bid) {
+  const query = [bid?.pncp_id, bid?.title, bid?.organization_name].filter(Boolean).join(" ").trim();
+  if (!query) return GOV_COMPRAS_BASE_URL;
+  return `${GOV_COMPRAS_BASE_URL}/search?SearchableText=${encodeURIComponent(query)}`;
 }
 
-function canEmbedInIframe(sourceUrl) {
-  if (!sourceUrl) return false;
-  return !sourceUrl.includes("pncp.gov.br/compras/");
+function resolvePublicNoticeUrl(bid) {
+  const sourceUrl = bid?.source_url || "";
+
+  if (!sourceUrl) {
+    return buildGovComprasSearchUrl(bid);
+  }
+
+  if (sourceUrl.startsWith("http") && !sourceUrl.includes("pncp.gov.br/compras/")) {
+    return sourceUrl;
+  }
+
+  return buildGovComprasSearchUrl(bid);
+}
+
+function canEmbedInIframe(url) {
+  if (!url) return false;
+  return /\.pdf($|\?)/i.test(url);
 }
 
 export default function BidDetailsPage() {
@@ -34,8 +45,8 @@ export default function BidDetailsPage() {
   const [error, setError] = useState("");
   const [analysisRaw, setAnalysisRaw] = useState("");
 
-  const editalUrl = resolvePublicNoticeUrl(bid?.source_url);
-  const iframeAllowed = canEmbedInIframe(bid?.source_url);
+  const editalUrl = resolvePublicNoticeUrl(bid);
+  const iframeAllowed = canEmbedInIframe(editalUrl);
 
   async function loadBid() {
     try {
@@ -146,8 +157,8 @@ export default function BidDetailsPage() {
             <p className="mt-2 font-body text-brand-ink/80">
               Este edital esta com link direto indisponivel. Abra no portal oficial de compras:
               {" "}
-              <a href={GOV_COMPRAS_FALLBACK_URL} target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
-                {GOV_COMPRAS_FALLBACK_URL}
+              <a href={editalUrl} target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
+                {editalUrl}
               </a>
             </p>
           )}
