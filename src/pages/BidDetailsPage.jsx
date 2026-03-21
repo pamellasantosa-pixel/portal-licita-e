@@ -10,6 +10,19 @@ function parseGeminiText(raw) {
   return sanitized;
 }
 
+function resolvePublicNoticeUrl(sourceUrl) {
+  if (!sourceUrl) return "https://www.gov.br/compras/pt-br";
+  if (sourceUrl.includes("pncp.gov.br/compras/")) {
+    return "https://www.gov.br/compras/pt-br";
+  }
+  return sourceUrl;
+}
+
+function canEmbedInIframe(sourceUrl) {
+  if (!sourceUrl) return false;
+  return !sourceUrl.includes("pncp.gov.br/compras/");
+}
+
 export default function BidDetailsPage() {
   const { id } = useParams();
   const [bid, setBid] = useState(null);
@@ -17,6 +30,9 @@ export default function BidDetailsPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
   const [analysisRaw, setAnalysisRaw] = useState("");
+
+  const editalUrl = resolvePublicNoticeUrl(bid?.source_url);
+  const iframeAllowed = canEmbedInIframe(bid?.source_url);
 
   async function loadBid() {
     try {
@@ -37,16 +53,11 @@ export default function BidDetailsPage() {
   }, [id]);
 
   async function handleAnalyze() {
-    if (!bid?.source_url) {
-      setError("Este edital nao possui URL de documento para analise.");
-      return;
-    }
-
     try {
       setIsAnalyzing(true);
       setError("");
       const result = await analyzeBidWithGemini({
-        pdfUrl: bid.source_url,
+        pdfUrl: editalUrl,
         bidTitle: bid.title
       });
       const raw = parseGeminiText(result.raw || "");
@@ -95,19 +106,19 @@ export default function BidDetailsPage() {
 
           <div className="mt-5 flex flex-wrap gap-3">
             <a
-              href={bid.source_url || "#"}
+              href={editalUrl}
               target="_blank"
               rel="noreferrer"
               className="rounded-xl border border-brand-brown/20 bg-white px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-brand-brown"
             >
-              Visualizar PDF/Edital
+              Visualizar Edital no Portal
             </a>
             <button
               onClick={handleAnalyze}
               disabled={isAnalyzing}
               className="rounded-xl bg-brand-cyan px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-white disabled:opacity-60"
             >
-              {isAnalyzing ? "Analisando..." : "Gerar Analise de Viabilidade (IA)"}
+              {isAnalyzing ? "Analisando..." : "Gerar Analise Gratuita"}
             </button>
             <button
               onClick={() => handleMark({ is_favorite: true, is_rejected: false, status: "favoritado" })}
@@ -128,10 +139,18 @@ export default function BidDetailsPage() {
 
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
           <h2 className="font-heading text-2xl text-brand-brown">Visualizador de PDF</h2>
-          {!bid.source_url && <p className="mt-2 font-body text-brand-ink/80">Este edital nao possui documento associado.</p>}
-          {bid.source_url && (
+          {!iframeAllowed && (
+            <p className="mt-2 font-body text-brand-ink/80">
+              Este edital esta com link direto indisponivel. Abra no portal oficial de compras:
+              {" "}
+              <a href="https://www.gov.br/compras/pt-br" target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
+                https://www.gov.br/compras/pt-br
+              </a>
+            </p>
+          )}
+          {iframeAllowed && (
             <div className="mt-3 overflow-hidden rounded-xl border border-brand-brown/10">
-              <iframe title="PDF do edital" src={bid.source_url} className="h-[560px] w-full" />
+              <iframe title="PDF do edital" src={editalUrl} className="h-[560px] w-full" />
             </div>
           )}
         </section>
