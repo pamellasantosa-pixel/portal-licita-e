@@ -4,7 +4,7 @@ import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
-const GOV_COMPRAS_BASE_URL = "https://www.gov.br/compras/pt-br";
+const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
 
 function parseGeminiText(raw) {
   if (!raw) return "";
@@ -12,24 +12,28 @@ function parseGeminiText(raw) {
   return sanitized;
 }
 
-function buildGovComprasSearchUrl(bid) {
+function buildPncpSearchUrl(bid) {
   const query = [bid?.pncp_id, bid?.title, bid?.organization_name].filter(Boolean).join(" ").trim();
-  if (!query) return GOV_COMPRAS_BASE_URL;
-  return `${GOV_COMPRAS_BASE_URL}/search?SearchableText=${encodeURIComponent(query)}`;
+  const params = new URLSearchParams({
+    q: query,
+    status: "recebendo_proposta",
+    pagina: "1"
+  });
+  return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
 }
 
 function resolvePublicNoticeUrl(bid) {
   const sourceUrl = bid?.source_url || "";
 
   if (!sourceUrl) {
-    return buildGovComprasSearchUrl(bid);
+    return buildPncpSearchUrl(bid);
   }
 
   if (sourceUrl.startsWith("http") && !sourceUrl.includes("pncp.gov.br/compras/")) {
     return sourceUrl;
   }
 
-  return buildGovComprasSearchUrl(bid);
+  return buildPncpSearchUrl(bid);
 }
 
 function canEmbedInIframe(url) {
@@ -155,7 +159,7 @@ export default function BidDetailsPage() {
           <h2 className="font-heading text-2xl text-brand-brown">Visualizador de PDF</h2>
           {!iframeAllowed && (
             <p className="mt-2 font-body text-brand-ink/80">
-              Este edital esta com link direto indisponivel. Abra no portal oficial de compras:
+              Este edital esta com link direto indisponivel. Abra na busca oficial de editais do PNCP:
               {" "}
               <a href={editalUrl} target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
                 {editalUrl}

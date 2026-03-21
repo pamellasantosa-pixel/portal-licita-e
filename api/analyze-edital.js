@@ -48,15 +48,14 @@
 
   const summary = {
     method: "analise_heuristica_gratuita",
-    source_reference:
-      "https://www.gov.br/compras/pt-br/acesso-a-informacao/manuais/manual-fase-interna/manual-mentoria/tutorial_mentoria.pdf",
+    source_reference: "https://pncp.gov.br/app/editais?q=&status=recebendo_proposta&pagina=1",
     is_viable: isViable,
     score,
     sinais_positivos: hits,
     sinais_de_atencao: cautions,
     justification: isViable
       ? "O edital parece aderente a servicos de consultoria socioambiental/sociologica com base nos termos encontrados no titulo e referencia do documento."
-      : "O edital nao apresenta termos suficientes de aderencia para consultoria socioambiental/sociologica. Recomenda-se validacao manual no Compras.gov.br.",
+      : "O edital nao apresenta termos suficientes de aderencia para consultoria socioambiental/sociologica. Recomenda-se validacao manual no PNCP.",
     deliverables
   };
 
