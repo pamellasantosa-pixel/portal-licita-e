@@ -28,6 +28,39 @@ function normalizePncpItem(item) {
   };
 }
 
+function normalizePayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.itens)) return payload.itens;
+  if (Array.isArray(payload?.resultado)) return payload.resultado;
+  return [];
+}
+
+function scoreBid(text, keywordSet) {
+  const lowered = (text || "").toLowerCase();
+  const keywordHits = keywordSet.filter((keyword) => lowered.includes(keyword.toLowerCase())).length;
+  const orgHits = TARGET_ORGS.filter((org) => lowered.includes(org.toLowerCase())).length;
+  const cnaeHits = CNAES.filter((cnae) => lowered.includes(cnae.toLowerCase())).length;
+
+  // Aceita resultado com pelo menos 1 keyword; org/cnae ajudam no ranking, mas nao bloqueiam.
+  return {
+    total: keywordHits * 2 + orgHits + cnaeHits,
+    keywordHits
+  };
+}
+
+function dedupeByPncpId(items) {
+  const map = new Map();
+  for (const item of items) {
+    const key = item.pncp_id;
+    if (!key) continue;
+    if (!map.has(key)) {
+      map.set(key, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
 async function fetchPncpByKeyword(keyword) {
   const url = `${PNCP_URL}?q=${encodeURIComponent(keyword)}&pagina=1&tamanhoPagina=50`;
   try {
@@ -42,19 +75,7 @@ async function fetchPncpByKeyword(keyword) {
     }
 
     const payload = await response.json();
-    if (Array.isArray(payload)) {
-      return { keyword, items: payload };
-    }
-
-    if (Array.isArray(payload.data)) {
-      return { keyword, items: payload.data };
-    }
-
-    if (Array.isArray(payload.itens)) {
-      return { keyword, items: payload.itens };
-    }
-
-    return { keyword, items: [] };
+    return { keyword, items: normalizePayload(payload) };
   } catch {
     return {
       keyword,
@@ -62,6 +83,30 @@ async function fetchPncpByKeyword(keyword) {
       warning: `PNCP indisponivel para keyword ${keyword}`
     };
   }
+}
+
+async function fetchRecentPncpPages(totalPages = 2) {
+  const pages = [];
+
+  for (let page = 1; page <= totalPages; page += 1) {
+    pages.push(page);
+  }
+
+  const responses = await Promise.all(
+    pages.map(async (page) => {
+      const url = `${PNCP_URL}?pagina=${page}&tamanhoPagina=50`;
+      try {
+        const response = await fetch(url);
+        if (!response.ok) return [];
+        const payload = await response.json();
+        return normalizePayload(payload);
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  return responses.flat();
 }
 
 export default async function handler(req, res) {
@@ -75,11 +120,21 @@ export default async function handler(req, res) {
   try {
     const allResults = await Promise.all(keywords.map((keyword) => fetchPncpByKeyword(keyword)));
     const warnings = allResults.filter((result) => result.warning).map((result) => result.warning);
-    const flattened = allResults.flatMap((result) => result.items).map(normalizePncpItem);
+    let rawItems = allResults.flatMap((result) => result.items);
 
-    const filtered = flattened.filter((bid) => {
+    // Fallback quando API por termo retorna vazia/instavel: busca paginas recentes e filtra localmente.
+    if (rawItems.length < 5) {
+      const recentItems = await fetchRecentPncpPages(3);
+      rawItems = [...rawItems, ...recentItems];
+    }
+
+    const flattened = rawItems.map(normalizePncpItem);
+    const deduped = dedupeByPncpId(flattened);
+
+    const filtered = deduped.filter((bid) => {
       const text = `${bid.title} ${bid.organization_name}`;
-      return hasAnyKeyword(text, KEYWORDS) && hasAnyKeyword(text, TARGET_ORGS.concat(CNAES));
+      const scored = scoreBid(text, keywords);
+      return scored.keywordHits > 0;
     });
 
     if (filtered.length === 0) {
