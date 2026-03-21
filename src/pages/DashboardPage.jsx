@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getTodayBids } from "../services/bidsService";
 import { syncPncBids } from "../services/pncpService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
+import MainNav from "../components/MainNav";
 
 function dateToBrazilian(dateLike) {
   return new Intl.DateTimeFormat("pt-BR", {
@@ -70,6 +71,7 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-brand-sand via-[#FFFDFB] to-[#F2F8F9] px-6 py-8">
       <div className="mx-auto max-w-7xl space-y-8">
+        <MainNav />
         <header className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="font-body text-sm uppercase tracking-[0.25em] text-brand-cyan">Dashboard</p>

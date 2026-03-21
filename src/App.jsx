@@ -2,6 +2,11 @@ import { useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
+import BidsPage from "./pages/BidsPage";
+import BidDetailsPage from "./pages/BidDetailsPage";
+import DocumentsPage from "./pages/DocumentsPage";
+import CalendarPage from "./pages/CalendarPage";
+import SettingsPage from "./pages/SettingsPage";
 import { getSupabaseClientOrThrow } from "./lib/supabaseClient";
 
 function ProtectedRoute({ children }) {
@@ -43,6 +48,46 @@ export default function App() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/bids"
+        element={
+          <ProtectedRoute>
+            <BidsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/bids/:id"
+        element={
+          <ProtectedRoute>
+            <BidDetailsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/documents"
+        element={
+          <ProtectedRoute>
+            <DocumentsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/calendar"
+        element={
+          <ProtectedRoute>
+            <CalendarPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <SettingsPage />
           </ProtectedRoute>
         }
       />

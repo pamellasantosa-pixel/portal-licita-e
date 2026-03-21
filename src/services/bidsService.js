@@ -22,3 +22,45 @@ export async function getTodayBids() {
 
   return data ?? [];
 }
+
+export async function getAllBids() {
+  const supabase = getSupabaseClientOrThrow();
+
+  const { data, error } = await supabase
+    .from("bids")
+    .select("id,title,published_date,closing_date,status,is_favorite,is_rejected,organization_name,source_url")
+    .order("published_date", { ascending: false })
+    .limit(150);
+
+  if (error) {
+    throw new Error(`Erro ao carregar lista de bids: ${error.message}`);
+  }
+
+  return data ?? [];
+}
+
+export async function getBidById(id) {
+  const supabase = getSupabaseClientOrThrow();
+
+  const { data, error } = await supabase
+    .from("bids")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) {
+    throw new Error(`Erro ao carregar bid: ${error.message}`);
+  }
+
+  return data;
+}
+
+export async function updateBidStatus(id, patch) {
+  const supabase = getSupabaseClientOrThrow();
+
+  const { error } = await supabase.from("bids").update(patch).eq("id", id);
+
+  if (error) {
+    throw new Error(`Erro ao atualizar bid: ${error.message}`);
+  }
+}
