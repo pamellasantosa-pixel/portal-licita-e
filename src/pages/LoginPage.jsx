@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 
 export default function LoginPage() {
@@ -89,9 +89,9 @@ export default function LoginPage() {
           >
             {isSubmitting ? "Entrando..." : "Entrar"}
           </button>
-          <button type="button" className="font-body text-sm text-brand-brown underline decoration-brand-cyan decoration-2 underline-offset-4">
+          <Link to="/recover" className="font-body text-sm text-brand-brown underline decoration-brand-cyan decoration-2 underline-offset-4">
             Esqueci minha senha
-          </button>
+          </Link>
         </form>
       </section>
     </main>

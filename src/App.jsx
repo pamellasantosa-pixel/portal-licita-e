@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import LoginPage from "./pages/LoginPage";
+import RecoverPage from "./pages/RecoverPage";
 import DashboardPage from "./pages/DashboardPage";
 import BidsPage from "./pages/BidsPage";
 import BidDetailsPage from "./pages/BidDetailsPage";
@@ -43,6 +44,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<LoginPage />} />
+      <Route path="/recover" element={<RecoverPage />} />
       <Route
         path="/dashboard"
         element={
