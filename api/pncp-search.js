@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { CNAES, KEYWORDS, TARGET_ORGS } from "./_shared/filters.js";
 
-const PNCP_URL = "https://pncp.gov.br/api/pncp/v1/contratacoes";
+const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
+const PNCP_BASE_URL = "https://pncp.gov.br";
 
 function hasAnyKeyword(text, words) {
   const normalized = (text || "").toLowerCase();
@@ -9,18 +10,21 @@ function hasAnyKeyword(text, words) {
 }
 
 function normalizePncpItem(item) {
-  const title = item.objetoCompra || item.objeto || item.titulo || "Sem titulo";
-  const organizationName = item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado";
-  const sourceUrl = item.linkSistemaOrigem || item.linkProcessoEletronico || item.url;
-  const publishedDate = item.dataPublicacaoPncp || item.dataPublicacao || new Date().toISOString();
-  const closingDate = item.dataEncerramentoProposta || null;
+  const title = item.title || item.objetoCompra || item.objeto || item.titulo || "Sem titulo";
+  const organizationName = item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado";
+  const sourcePath = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
+  const sourceUrl = sourcePath.startsWith("http") ? sourcePath : `${PNCP_BASE_URL}${sourcePath}`;
+  const publishedDate = item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();
+  const closingDate = item.data_fim_vigencia || item.dataEncerramentoProposta || null;
+  const pncpControl = item.numero_controle_pncp || item.numeroControlePNCP;
+  const sequence = item.numero_sequencial || item.sequencialCompra;
 
   return {
     title,
     organization_name: organizationName,
     source_url: sourceUrl,
-    pncp_id: String(item.sequencialCompra || item.numeroControlePNCP || Math.random()),
-    modality: item.modalidadeNome || item.modalidade || null,
+    pncp_id: String(pncpControl || sequence || Math.random()),
+    modality: item.modalidade_licitacao_nome || item.modalidadeNome || item.modalidade || null,
     published_date: publishedDate,
     closing_date: closingDate,
     status: "em_analise",
@@ -29,6 +33,7 @@ function normalizePncpItem(item) {
 }
 
 function normalizePayload(payload) {
+  if (Array.isArray(payload?.items)) return payload.items;
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.itens)) return payload.itens;
@@ -62,7 +67,15 @@ function dedupeByPncpId(items) {
 }
 
 async function fetchPncpByKeyword(keyword) {
-  const url = `${PNCP_URL}?q=${encodeURIComponent(keyword)}&pagina=1&tamanhoPagina=50`;
+  const query = new URLSearchParams({
+    tipos_documento: "edital",
+    status: "recebendo_proposta",
+    q: keyword,
+    pagina: "1",
+    tamanhoPagina: "50"
+  });
+  const url = `${PNCP_SEARCH_URL}?${query.toString()}`;
+
   try {
     const response = await fetch(url);
 
@@ -94,7 +107,14 @@ async function fetchRecentPncpPages(totalPages = 2) {
 
   const responses = await Promise.all(
     pages.map(async (page) => {
-      const url = `${PNCP_URL}?pagina=${page}&tamanhoPagina=50`;
+      const query = new URLSearchParams({
+        tipos_documento: "edital",
+        status: "recebendo_proposta",
+        pagina: String(page),
+        tamanhoPagina: "50"
+      });
+      const url = `${PNCP_SEARCH_URL}?${query.toString()}`;
+
       try {
         const response = await fetch(url);
         if (!response.ok) return [];
