@@ -3,22 +3,48 @@
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { pdfUrl, bidTitle } = req.body || {};
-  const normalized = `${bidTitle || ""} ${pdfUrl || ""}`.toLowerCase();
+  const { pdfUrl, bidTitle, description, organizationName, modality, pncpId } = req.body || {};
+  const normalized = `${bidTitle || ""} ${description || ""} ${organizationName || ""} ${modality || ""} ${pncpId || ""} ${pdfUrl || ""}`
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Keywords alinhadas ao escopo do Licita-E (mesmas do filtro inicial)
+  const primaryKeywords = [
+    "processos participativos",
+    "consulta livre",
+    "clpi",
+    "povos e comunidades tradicionais",
+    "mediação",
+    "mediacao",
+    "conflitos socioambientais",
+    "diagnóstico",
+    "diagnostico",
+    "planejamento territorial",
+    "urbano",
+    "facilitação",
+    "facilitacao",
+    "oficinas",
+    "mapeamento",
+    "quilomb",
+    "indigen"
+  ];
 
   const positiveSignals = [
-    "consulta",
-    "participativo",
     "socioambiental",
     "comunidades tradicionais",
-    "quilomb",
-    "indigen",
     "diagnostico",
     "territorial",
     "oficina",
     "pesquisa social",
     "antropologia",
-    "sociologia"
+    "sociologia",
+    "etnografia",
+    "trabalho social",
+    "consulta pública",
+    "consulta publica",
+    "audiência pública",
+    "audiencia publica"
   ];
 
   const cautionSignals = [
@@ -26,17 +52,21 @@
     "engenharia pesada",
     "asfalto",
     "cimento",
+    "pavimentacao",
+    "pavimentação",
     "locacao de veiculos",
     "combustivel",
     "medicamento",
     "equipamento hospitalar"
   ];
 
+  const keywordHits = primaryKeywords.filter((token) => normalized.includes(token));
   const hits = positiveSignals.filter((token) => normalized.includes(token));
   const cautions = cautionSignals.filter((token) => normalized.includes(token));
 
-  const score = hits.length - cautions.length;
-  const isViable = score >= 1;
+  const score = keywordHits.length * 3 + hits.length - cautions.length * 2;
+  const isViable = score >= 3;
+  const confidence = Math.max(10, Math.min(95, 30 + score * 10));
 
   const deliverables = [
     "Plano de trabalho com cronograma",
@@ -48,14 +78,16 @@
 
   const summary = {
     method: "analise_heuristica_gratuita",
-    source_reference: "https://pncp.gov.br/app/editais?q=&status=recebendo_proposta&pagina=1",
+    source_reference: pdfUrl || "https://pncp.gov.br/app/editais?status=recebendo_proposta&pagina=1",
     is_viable: isViable,
     score,
+    confidence,
+    keywords_encontradas: keywordHits,
     sinais_positivos: hits,
     sinais_de_atencao: cautions,
     justification: isViable
-      ? "O edital parece aderente a servicos de consultoria socioambiental/sociologica com base nos termos encontrados no titulo e referencia do documento."
-      : "O edital nao apresenta termos suficientes de aderencia para consultoria socioambiental/sociologica. Recomenda-se validacao manual no PNCP.",
+      ? "Ha sinais consistentes de que o edital envolve consultoria/servicos socioambientais/participativos, com termos aderentes encontrados em titulo/descricao."
+      : "Nao encontrei sinais suficientes de aderencia no titulo/descricao. Vale abrir o edital no PNCP e validar o objeto e as entregas exigidas.",
     deliverables
   };
 

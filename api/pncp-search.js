@@ -11,9 +11,22 @@ function hasAnyKeyword(text, words) {
 
 function normalizePncpItem(item) {
   const title = item.title || item.objetoCompra || item.objeto || item.titulo || "Sem titulo";
+  const description =
+    item.description ||
+    item.descricao ||
+    item.objetoCompra ||
+    item.objeto ||
+    item.resumo ||
+    null;
   const organizationName = item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado";
   const sourcePath = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
-  const sourceUrl = sourcePath.startsWith("http") ? sourcePath : `${PNCP_BASE_URL}${sourcePath}`;
+
+  // O payload do /api/search costuma trazer `item_url` no formato `/compras/<cnpj>/<ano>/<seq>`.
+  // A URL pública navegável é `https://pncp.gov.br/app/compras/<cnpj>/<ano>/<seq>`.
+  const normalizedPath =
+    sourcePath && sourcePath.startsWith("/compras/") ? `/app${sourcePath}` : sourcePath;
+
+  const sourceUrl = normalizedPath.startsWith("http") ? normalizedPath : `${PNCP_BASE_URL}${normalizedPath}`;
   const publishedDate = item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();
   const closingDate = item.data_fim_vigencia || item.dataEncerramentoProposta || null;
   const pncpControl = item.numero_controle_pncp || item.numeroControlePNCP;
@@ -21,6 +34,7 @@ function normalizePncpItem(item) {
 
   return {
     title,
+    description,
     organization_name: organizationName,
     source_url: sourceUrl,
     pncp_id: String(pncpControl || sequence || Math.random()),

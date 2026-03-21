@@ -5,6 +5,7 @@ import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
+const PNCP_APP_BASE_URL = "https://pncp.gov.br/app";
 
 function parseGeminiText(raw) {
   if (!raw) return "";
@@ -13,7 +14,9 @@ function parseGeminiText(raw) {
 }
 
 function buildPncpSearchUrl(bid) {
-  const query = [bid?.pncp_id, bid?.title, bid?.organization_name].filter(Boolean).join(" ").trim();
+  // O campo `q` do PNCP é busca textual; queries longas podem não retornar nada.
+  // Preferimos buscar pelo `pncp_id` (quando existe) e, como fallback, por um pedaço do título.
+  const query = (bid?.pncp_id || bid?.title || "").toString().trim();
   const params = new URLSearchParams({
     q: query,
     status: "recebendo_proposta",
@@ -24,6 +27,16 @@ function buildPncpSearchUrl(bid) {
 
 function resolvePublicNoticeUrl(bid) {
   const sourceUrl = bid?.source_url || "";
+
+  // Corrige registros antigos que foram salvos como `https://pncp.gov.br/compras/...` (404)
+  // e converte para a URL pública navegável `https://pncp.gov.br/app/compras/...`.
+  if (sourceUrl.startsWith("https://pncp.gov.br/compras/")) {
+    return sourceUrl.replace("https://pncp.gov.br", PNCP_APP_BASE_URL);
+  }
+
+  if (sourceUrl.startsWith("/compras/")) {
+    return `${PNCP_APP_BASE_URL}${sourceUrl}`;
+  }
 
   if (!sourceUrl) {
     return buildPncpSearchUrl(bid);
@@ -76,7 +89,11 @@ export default function BidDetailsPage() {
       setError("");
       const result = await analyzeBidWithGemini({
         pdfUrl: editalUrl,
-        bidTitle: bid.title
+        bidTitle: bid.title,
+        description: bid.description,
+        organizationName: bid.organization_name,
+        modality: bid.modality,
+        pncpId: bid.pncp_id
       });
       const raw = parseGeminiText(result.raw || "");
       await updateBidStatus(bid.id, {
