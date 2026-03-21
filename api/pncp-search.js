@@ -30,26 +30,38 @@ function normalizePncpItem(item) {
 
 async function fetchPncpByKeyword(keyword) {
   const url = `${PNCP_URL}?q=${encodeURIComponent(keyword)}&pagina=1&tamanhoPagina=50`;
-  const response = await fetch(url);
+  try {
+    const response = await fetch(url);
 
-  if (!response.ok) {
-    throw new Error(`PNCP indisponivel para keyword ${keyword}`);
+    if (!response.ok) {
+      return {
+        keyword,
+        items: [],
+        warning: `PNCP indisponivel para keyword ${keyword}`
+      };
+    }
+
+    const payload = await response.json();
+    if (Array.isArray(payload)) {
+      return { keyword, items: payload };
+    }
+
+    if (Array.isArray(payload.data)) {
+      return { keyword, items: payload.data };
+    }
+
+    if (Array.isArray(payload.itens)) {
+      return { keyword, items: payload.itens };
+    }
+
+    return { keyword, items: [] };
+  } catch {
+    return {
+      keyword,
+      items: [],
+      warning: `PNCP indisponivel para keyword ${keyword}`
+    };
   }
-
-  const payload = await response.json();
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-
-  if (Array.isArray(payload.data)) {
-    return payload.data;
-  }
-
-  if (Array.isArray(payload.itens)) {
-    return payload.itens;
-  }
-
-  return [];
 }
 
 export default async function handler(req, res) {
@@ -62,7 +74,8 @@ export default async function handler(req, res) {
 
   try {
     const allResults = await Promise.all(keywords.map((keyword) => fetchPncpByKeyword(keyword)));
-    const flattened = allResults.flat().map(normalizePncpItem);
+    const warnings = allResults.filter((result) => result.warning).map((result) => result.warning);
+    const flattened = allResults.flatMap((result) => result.items).map(normalizePncpItem);
 
     const filtered = flattened.filter((bid) => {
       const text = `${bid.title} ${bid.organization_name}`;
@@ -70,7 +83,11 @@ export default async function handler(req, res) {
     });
 
     if (filtered.length === 0) {
-      return res.status(200).json({ inserted: 0, message: "Nenhum edital aderente encontrado." });
+      return res.status(200).json({
+        inserted: 0,
+        warnings,
+        message: "Nenhum edital aderente encontrado."
+      });
     }
 
     const { error } = await supabase.from("bids").upsert(filtered, { onConflict: "pncp_id" });
@@ -78,7 +95,7 @@ export default async function handler(req, res) {
       throw new Error(error.message);
     }
 
-    return res.status(200).json({ inserted: filtered.length });
+    return res.status(200).json({ inserted: filtered.length, warnings });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Erro ao consultar PNCP" });
   }

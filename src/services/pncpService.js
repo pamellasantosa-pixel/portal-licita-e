@@ -12,5 +12,10 @@ export async function syncPncBids() {
     throw new Error(payload.error || "Falha na sincronizacao PNCP.");
   }
 
-  return response.json();
+  const payload = await response.json();
+  return {
+    inserted: payload.inserted ?? 0,
+    warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+    message: payload.message || ""
+  };
 }
