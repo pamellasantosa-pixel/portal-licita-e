@@ -3,8 +3,10 @@ import MainNav from "../components/MainNav";
 import { loadSystemSettings, saveSystemSettings } from "../services/settingsService";
 
 export default function SettingsPage() {
-  const [keywords, setKeywords] = useState("Processos Participativos, CLPI, Diagnostico Socioambiental");
-  const [cnaes, setCnaes] = useState("7320-3/00, 7220-7/00");
+  const [keywords, setKeywords] = useState(
+    "Diagnostico Socioambiental, Estudo de Impacto Social, Plano Basico Ambiental, CLPI, Convencao 169 da OIT, Licenciamento Ambiental, Componente Quilombola, Componente Indigena, Termo de Referencia, Audiencia Publica"
+  );
+  const [cnaes, setCnaes] = useState("7320-3/00, 7490-1/99, 7020-4/00, 7220-7/00, 6201-5/01");
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");

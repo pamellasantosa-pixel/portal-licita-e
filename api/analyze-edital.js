@@ -9,33 +9,44 @@
     .replace(/\s+/g, " ")
     .trim();
 
-  // Keywords alinhadas ao escopo do Licita-E (mesmas do filtro inicial)
+  // Termos de projetos executados pela Expressao Socioambiental
   const primaryKeywords = [
-    "processos participativos",
-    "consulta livre",
+    "diagnostico socioambiental",
+    "estudo de impacto social",
+    "plano basico ambiental",
+    "consulta livre, previa e informada",
+    "mediacao de conflitos territoriais",
+    "cadastro socioeconomico",
+    "monitoramento de condicionantes",
+    "gestao de processos socioambientais",
+    "regularizacao fundiaria",
+    "elaboracao de relatorios de impacto",
+    "consultoria em sustentabilidade",
+    "planos de manejo",
+    "mobilizacao social",
+    "avaliacao de riscos sociais",
+    "antropologia aplicada",
+    "geoprocessamento e mapeamento",
+    "inventario florestal",
+    "gestao de participacao social",
+    "programas de educacao ambiental",
+    "facilitacao de dialogos intersetoriais",
     "clpi",
-    "povos e comunidades tradicionais",
-    "mediação",
-    "mediacao",
-    "conflitos socioambientais",
-    "diagnóstico",
-    "diagnostico",
-    "planejamento territorial",
-    "urbano",
-    "facilitação",
-    "facilitacao",
-    "oficinas",
-    "mapeamento",
-    "quilomb",
-    "indigen"
+    "convencao 169",
+    "licenciamento ambiental",
+    "componente quilombola",
+    "componente indigena",
+    "termo de referencia",
+    "audiencia publica"
   ];
 
   const positiveSignals = [
     "socioambiental",
     "comunidades tradicionais",
-    "diagnostico",
+    "quilombola",
+    "indigena",
     "territorial",
-    "oficina",
+    "licenciamento",
     "pesquisa social",
     "antropologia",
     "sociologia",
@@ -48,6 +59,7 @@
   ];
 
   const cautionSignals = [
+    "engenharia civil",
     "obra",
     "engenharia pesada",
     "asfalto",
@@ -56,16 +68,22 @@
     "pavimentação",
     "locacao de veiculos",
     "combustivel",
+    "lubrificantes",
+    "posto",
     "medicamento",
-    "equipamento hospitalar"
+    "hospitalar",
+    "limpeza urbana",
+    "coleta de lixo",
+    "manutencao predial",
+    "ar-condicionado"
   ];
 
   const keywordHits = primaryKeywords.filter((token) => normalized.includes(token));
   const hits = positiveSignals.filter((token) => normalized.includes(token));
   const cautions = cautionSignals.filter((token) => normalized.includes(token));
 
-  const score = keywordHits.length * 3 + hits.length - cautions.length * 2;
-  const isViable = score >= 3;
+  const score = keywordHits.length * 4 + hits.length * 2 - cautions.length * 4;
+  const isViable = score >= 8;
   const confidence = Math.max(10, Math.min(95, 30 + score * 10));
 
   const deliverables = [

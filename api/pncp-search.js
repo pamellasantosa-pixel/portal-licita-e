@@ -1,5 +1,16 @@
 import { createClient } from "@supabase/supabase-js";
-import { CNAES, KEYWORDS, NICHES, PROJECT_TERMS, TARGET_ORGS } from "./_shared/filters.js";
+import {
+  CNAES,
+  EXCLUSION_TERMS,
+  KEYWORDS,
+  MAX_TICKET,
+  MIN_TICKET,
+  NICHES,
+  PRIORITY_TERRITORIES,
+  PROJECT_TERMS,
+  REQUIRED_TERMS,
+  TARGET_ORGS
+} from "./_shared/filters.js";
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
@@ -18,6 +29,30 @@ function uniqTerms(values = []) {
     set.add(term);
   }
   return Array.from(set);
+}
+
+function parseNumericValue(value) {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(String(value).replace(/[^\d,.-]/g, "").replace(".", "").replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function extractTicketValue(rawItem = {}) {
+  const candidates = [
+    rawItem.valor_global,
+    rawItem.valorEstimado,
+    rawItem.valor_total_estimado,
+    rawItem.valorTotalEstimado,
+    rawItem.valorTotal,
+    rawItem.preco_estimado,
+    rawItem.precoGlobal
+  ];
+  for (const candidate of candidates) {
+    const num = parseNumericValue(candidate);
+    if (num != null) return num;
+  }
+  return null;
 }
 
 function splitTerms(value) {
@@ -46,8 +81,11 @@ async function loadDynamicProfile(supabase, requestKeywords) {
   const projects = uniqTerms([...PROJECT_TERMS]);
   const cnaes = uniqTerms([...dbCnaes, ...CNAES]);
   const targetOrgs = uniqTerms([...TARGET_ORGS]);
+  const required = uniqTerms([...REQUIRED_TERMS]);
+  const exclusions = uniqTerms([...EXCLUSION_TERMS]);
+  const territories = uniqTerms([...PRIORITY_TERRITORIES]);
 
-  return { keywords, niches, projects, cnaes, targetOrgs };
+  return { keywords, niches, projects, cnaes, targetOrgs, required, exclusions, territories };
 }
 
 function normalizePncpItem(item) {
@@ -98,32 +136,53 @@ function normalizePayload(payload) {
   return [];
 }
 
-function scoreBid(text, profile) {
+function scoreBid(text, profile, ticketValue = null) {
   const lowered = (text || "").toLowerCase();
   const keywordHits = profile.keywords.filter((keyword) => lowered.includes(keyword.toLowerCase())).length;
   const nicheHits = profile.niches.filter((term) => lowered.includes(term.toLowerCase())).length;
   const projectHits = profile.projects.filter((term) => lowered.includes(term.toLowerCase())).length;
   const orgHits = profile.targetOrgs.filter((org) => lowered.includes(org.toLowerCase())).length;
   const cnaeHits = profile.cnaes.filter((cnae) => lowered.includes(cnae.toLowerCase())).length;
+  const requiredHits = profile.required.filter((term) => lowered.includes(term.toLowerCase())).length;
+  const exclusionHits = profile.exclusions.filter((term) => lowered.includes(term.toLowerCase())).length;
+  const territoryHits = profile.territories.filter((term) => lowered.includes(term.toLowerCase())).length;
+
+  const ticketKnown = ticketValue != null;
+  const ticketInRange = ticketKnown ? ticketValue >= MIN_TICKET && ticketValue <= MAX_TICKET : true;
+  const ticketScore = !ticketKnown ? 0 : ticketInRange ? 3 : -4;
 
   // Score com pesos por aderencia ao perfil da Expressao Socioambiental.
-  const total = keywordHits * 5 + nicheHits * 4 + projectHits * 3 + cnaeHits * 2 + orgHits;
+  const total =
+    keywordHits * 5 +
+    nicheHits * 4 +
+    projectHits * 3 +
+    requiredHits * 6 +
+    cnaeHits * 3 +
+    territoryHits * 3 +
+    orgHits * 2 +
+    ticketScore -
+    exclusionHits * 7;
 
   return {
     total,
     keywordHits,
     nicheHits,
     projectHits,
+    requiredHits,
+    exclusionHits,
+    territoryHits,
     cnaeHits,
     orgHits,
-    strongMatch: keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0
+    ticketKnown,
+    ticketInRange,
+    strongMatch: (keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0) && exclusionHits === 0
   };
 }
 
 function dedupeByPncpId(items) {
   const map = new Map();
   for (const item of items) {
-    const key = item.pncp_id;
+    const key = item?.bid?.pncp_id;
     if (!key) continue;
     if (!map.has(key)) {
       map.set(key, item);
@@ -133,28 +192,27 @@ function dedupeByPncpId(items) {
 }
 
 async function fetchPncpByKeyword(keyword) {
-  const query = new URLSearchParams({
-    tipos_documento: "edital",
-    status: "recebendo_proposta",
-    q: keyword,
-    pagina: "1",
-    tamanhoPagina: "50"
-  });
-  const url = `${PNCP_SEARCH_URL}?${query.toString()}`;
+  const statuses = ["recebendo_proposta", "1", "2", "3", "4", "5"];
 
   try {
-    const response = await fetch(url);
+    const responses = await Promise.all(
+      statuses.map(async (status) => {
+        const query = new URLSearchParams({
+          tipos_documento: "edital",
+          status,
+          q: keyword,
+          pagina: "1",
+          tamanhoPagina: "50"
+        });
+        const url = `${PNCP_SEARCH_URL}?${query.toString()}`;
+        const response = await fetch(url);
+        if (!response.ok) return [];
+        const payload = await response.json();
+        return normalizePayload(payload);
+      })
+    );
 
-    if (!response.ok) {
-      return {
-        keyword,
-        items: [],
-        warning: `PNCP indisponivel para keyword ${keyword}`
-      };
-    }
-
-    const payload = await response.json();
-    return { keyword, items: normalizePayload(payload) };
+    return { keyword, items: responses.flat() };
   } catch {
     return {
       keyword,
@@ -232,25 +290,28 @@ export default async function handler(req, res) {
 
     console.log(`[PNCP-SEARCH] Total de raw items após fallback: ${rawItems.length}`);
 
-    const flattened = rawItems.map(normalizePncpItem);
+    const flattened = rawItems.map((raw) => ({ bid: normalizePncpItem(raw), raw }));
     const deduped = dedupeByPncpId(flattened);
 
     console.log(`[PNCP-SEARCH] Após normalizar e deduplicar: ${deduped.length} itens`);
 
     // Log de alguns itens para debug
     if (deduped.length > 0) {
-      console.log(`[PNCP-SEARCH] Amostra de itens:`, deduped.slice(0, 2).map(b => ({ title: b.title, org: b.organization_name })));
+      console.log(`[PNCP-SEARCH] Amostra de itens:`, deduped.slice(0, 2).map((row) => ({ title: row.bid.title, org: row.bid.organization_name })));
     }
 
     const scoredItems = deduped
-      .map((bid) => {
+      .map((row) => {
+        const bid = row.bid;
+        const raw = row.raw;
+        const ticketValue = extractTicketValue(raw);
         const text = `${bid.title} ${bid.description || ""} ${bid.organization_name || ""} ${bid.modality || ""} ${bid.pncp_id || ""}`;
-        const relevance = scoreBid(text, profile);
-        return { bid, relevance };
+        const relevance = scoreBid(text, profile, ticketValue);
+        return { bid, relevance, ticketValue };
       })
       .sort((a, b) => b.relevance.total - a.relevance.total);
 
-    const filtered = scoredItems.filter((row) => row.relevance.strongMatch).map((row) => row.bid);
+    const filtered = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 6).map((row) => row.bid);
 
     console.log(`[PNCP-SEARCH] Após filtro de keywords: ${filtered.length} itens`);
 
