@@ -22,9 +22,11 @@ function normalizePncpItem(item) {
   const sourcePath = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
 
   // O payload do /api/search costuma trazer `item_url` no formato `/compras/<cnpj>/<ano>/<seq>`.
-  // A URL pública navegável é `https://pncp.gov.br/app/compras/<cnpj>/<ano>/<seq>`.
+  // No app do PNCP, o deep-link mais consistente é via `/app/contratacoes/<cnpj>/<ano>/<seq>`.
   const normalizedPath =
-    sourcePath && sourcePath.startsWith("/compras/") ? `/app${sourcePath}` : sourcePath;
+    sourcePath && sourcePath.startsWith("/compras/")
+      ? `/app/contratacoes${sourcePath.replace(/^\/compras/, "")}`
+      : sourcePath;
 
   const sourceUrl = normalizedPath.startsWith("http") ? normalizedPath : `${PNCP_BASE_URL}${normalizedPath}`;
   const publishedDate = item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();

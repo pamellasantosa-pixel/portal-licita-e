@@ -5,7 +5,7 @@ import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
-const PNCP_APP_BASE_URL = "https://pncp.gov.br/app";
+const PNCP_CONTRATACOES_BASE_URL = "https://pncp.gov.br/app/contratacoes";
 
 function parseGeminiText(raw) {
   if (!raw) return "";
@@ -29,13 +29,21 @@ function resolvePublicNoticeUrl(bid) {
   const sourceUrl = bid?.source_url || "";
 
   // Corrige registros antigos que foram salvos como `https://pncp.gov.br/compras/...` (404)
-  // e converte para a URL pública navegável `https://pncp.gov.br/app/compras/...`.
+  // e converte para a URL pública navegável `https://pncp.gov.br/app/contratacoes/...`.
   if (sourceUrl.startsWith("https://pncp.gov.br/compras/")) {
-    return sourceUrl.replace("https://pncp.gov.br", PNCP_APP_BASE_URL);
+    const rest = sourceUrl.replace("https://pncp.gov.br/compras", "");
+    return `${PNCP_CONTRATACOES_BASE_URL}${rest}`;
+  }
+
+  // Corrige registros que foram salvos como `https://pncp.gov.br/app/compras/...`
+  if (sourceUrl.startsWith("https://pncp.gov.br/app/compras/")) {
+    const rest = sourceUrl.replace("https://pncp.gov.br/app/compras", "");
+    return `${PNCP_CONTRATACOES_BASE_URL}${rest}`;
   }
 
   if (sourceUrl.startsWith("/compras/")) {
-    return `${PNCP_APP_BASE_URL}${sourceUrl}`;
+    const rest = sourceUrl.replace(/^\/compras/, "");
+    return `${PNCP_CONTRATACOES_BASE_URL}${rest}`;
   }
 
   if (!sourceUrl) {
