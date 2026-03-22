@@ -28,7 +28,7 @@ export async function getAllBids() {
 
   const { data, error } = await supabase
     .from("bids")
-    .select("id,title,published_date,closing_date,status,is_favorite,is_rejected,organization_name,source_url")
+    .select("id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,source_url,pncp_id,modality")
     .order("published_date", { ascending: false })
     .limit(150);
 

@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { CNAES, KEYWORDS, TARGET_ORGS } from "./_shared/filters.js";
+import { CNAES, KEYWORDS, NICHES, PROJECT_TERMS, TARGET_ORGS } from "./_shared/filters.js";
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
@@ -7,6 +7,47 @@ const PNCP_BASE_URL = "https://pncp.gov.br";
 function hasAnyKeyword(text, words) {
   const normalized = (text || "").toLowerCase();
   return words.some((word) => normalized.includes(word.toLowerCase()));
+}
+
+function uniqTerms(values = []) {
+  const set = new Set();
+  for (const raw of values) {
+    if (!raw) continue;
+    const term = String(raw).trim();
+    if (!term) continue;
+    set.add(term);
+  }
+  return Array.from(set);
+}
+
+function splitTerms(value) {
+  if (!value) return [];
+  return String(value)
+    .split(/[;,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function loadDynamicProfile(supabase, requestKeywords) {
+  const [filtersResult, cnaesResult] = await Promise.all([
+    supabase.from("bid_filters").select("keyword,target_audience").eq("is_active", true),
+    supabase.from("company_cnae").select("cnae_code").eq("is_active", true)
+  ]);
+
+  const filterRows = filtersResult.error ? [] : filtersResult.data || [];
+  const cnaeRows = cnaesResult.error ? [] : cnaesResult.data || [];
+
+  const dbKeywords = filterRows.map((row) => row.keyword).filter(Boolean);
+  const dbNiches = filterRows.flatMap((row) => splitTerms(row.target_audience));
+  const dbCnaes = cnaeRows.map((row) => row.cnae_code).filter(Boolean);
+
+  const keywords = uniqTerms([...(requestKeywords || []), ...dbKeywords, ...KEYWORDS]);
+  const niches = uniqTerms([...dbNiches, ...NICHES]);
+  const projects = uniqTerms([...PROJECT_TERMS]);
+  const cnaes = uniqTerms([...dbCnaes, ...CNAES]);
+  const targetOrgs = uniqTerms([...TARGET_ORGS]);
+
+  return { keywords, niches, projects, cnaes, targetOrgs };
 }
 
 function normalizePncpItem(item) {
@@ -57,16 +98,25 @@ function normalizePayload(payload) {
   return [];
 }
 
-function scoreBid(text, keywordSet) {
+function scoreBid(text, profile) {
   const lowered = (text || "").toLowerCase();
-  const keywordHits = keywordSet.filter((keyword) => lowered.includes(keyword.toLowerCase())).length;
-  const orgHits = TARGET_ORGS.filter((org) => lowered.includes(org.toLowerCase())).length;
-  const cnaeHits = CNAES.filter((cnae) => lowered.includes(cnae.toLowerCase())).length;
+  const keywordHits = profile.keywords.filter((keyword) => lowered.includes(keyword.toLowerCase())).length;
+  const nicheHits = profile.niches.filter((term) => lowered.includes(term.toLowerCase())).length;
+  const projectHits = profile.projects.filter((term) => lowered.includes(term.toLowerCase())).length;
+  const orgHits = profile.targetOrgs.filter((org) => lowered.includes(org.toLowerCase())).length;
+  const cnaeHits = profile.cnaes.filter((cnae) => lowered.includes(cnae.toLowerCase())).length;
 
-  // Aceita resultado com pelo menos 1 keyword; org/cnae ajudam no ranking, mas nao bloqueiam.
+  // Score com pesos por aderencia ao perfil da Expressao Socioambiental.
+  const total = keywordHits * 5 + nicheHits * 4 + projectHits * 3 + cnaeHits * 2 + orgHits;
+
   return {
-    total: keywordHits * 2 + orgHits + cnaeHits,
-    keywordHits
+    total,
+    keywordHits,
+    nicheHits,
+    projectHits,
+    cnaeHits,
+    orgHits,
+    strongMatch: keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0
   };
 }
 
@@ -150,13 +200,22 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const keywords = req.body?.keywords?.length ? req.body.keywords : KEYWORDS;
+  const requestKeywords = req.body?.keywords?.length ? req.body.keywords : KEYWORDS;
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   try {
-    console.log(`[PNCP-SEARCH] Iniciando busca com ${keywords.length} keywords:`, keywords);
+    const profile = await loadDynamicProfile(supabase, requestKeywords);
+    const searchTerms = profile.keywords.slice(0, 40);
 
-    const allResults = await Promise.all(keywords.map((keyword) => fetchPncpByKeyword(keyword)));
+    console.log(`[PNCP-SEARCH] Iniciando busca com ${searchTerms.length} termos de perfil.`);
+    console.log(`[PNCP-SEARCH] Perfil ativo:`, {
+      keywords: profile.keywords.length,
+      niches: profile.niches.length,
+      projects: profile.projects.length,
+      cnaes: profile.cnaes.length
+    });
+
+    const allResults = await Promise.all(searchTerms.map((keyword) => fetchPncpByKeyword(keyword)));
     const warnings = allResults.filter((result) => result.warning).map((result) => result.warning);
     let rawItems = allResults.flatMap((result) => result.items);
 
@@ -183,18 +242,24 @@ export default async function handler(req, res) {
       console.log(`[PNCP-SEARCH] Amostra de itens:`, deduped.slice(0, 2).map(b => ({ title: b.title, org: b.organization_name })));
     }
 
-    const filtered = deduped.filter((bid) => {
-      const text = `${bid.title} ${bid.organization_name}`;
-      const scored = scoreBid(text, keywords);
-      return scored.keywordHits > 0;
-    });
+    const scoredItems = deduped
+      .map((bid) => {
+        const text = `${bid.title} ${bid.description || ""} ${bid.organization_name || ""} ${bid.modality || ""} ${bid.pncp_id || ""}`;
+        const relevance = scoreBid(text, profile);
+        return { bid, relevance };
+      })
+      .sort((a, b) => b.relevance.total - a.relevance.total);
+
+    const filtered = scoredItems.filter((row) => row.relevance.strongMatch).map((row) => row.bid);
 
     console.log(`[PNCP-SEARCH] Após filtro de keywords: ${filtered.length} itens`);
 
     if (filtered.length === 0) {
-      console.log(`[PNCP-SEARCH] Nenhum edital aderente (keywordHits > 0). Retornando todos os ${deduped.length} itens sem filtro de keyword.`);
-      // Fallback final: retorna todos os itens sem exigir keyword hit (melhor ter algo que nada)
-      const fallbackFiltered = deduped.slice(0, 50); // Limita a 50 para não sobrecarregar
+      console.log(`[PNCP-SEARCH] Nenhum edital aderente forte. Usando fallback por ranking dos ${deduped.length} itens.`);
+      const fallbackFiltered = scoredItems
+        .filter((row) => row.relevance.total > 0)
+        .map((row) => row.bid)
+        .slice(0, 50);
       
       if (fallbackFiltered.length === 0) {
         return res.status(200).json({
@@ -209,7 +274,7 @@ export default async function handler(req, res) {
         throw new Error(error.message);
       }
 
-      console.log(`[PNCP-SEARCH] Sucesso: inseridos ${fallbackFiltered.length} editais (fallback sem keyword filter)`);
+      console.log(`[PNCP-SEARCH] Sucesso: inseridos ${fallbackFiltered.length} editais (fallback por score)`);
       return res.status(200).json({ inserted: fallbackFiltered.length, warnings, fallback: true });
     }
 

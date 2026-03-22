@@ -63,11 +63,11 @@ export default function BidsPage() {
 
   const filtered = useMemo(() => {
     return bids.filter((item) => {
-      const matchesSearch = `${item.title} ${item.organization_name || ""}`.toLowerCase().includes(search.toLowerCase());
+      const baseText = `${item.title} ${item.description || ""} ${item.organization_name || ""}`.toLowerCase();
+      const matchesSearch = baseText.includes(search.toLowerCase());
       const matchesStatus = status === "todos" || item.status === status;
-      const matchesKeyword =
-        keywordFilter === "todos" || `${item.title} ${item.organization_name || ""}`.toLowerCase().includes(keywordFilter.toLowerCase());
-      const matchesCnae = cnaeFilter === "todos" || `${item.title} ${item.organization_name || ""}`.includes(cnaeFilter);
+      const matchesKeyword = keywordFilter === "todos" || baseText.includes(keywordFilter.toLowerCase());
+      const matchesCnae = cnaeFilter === "todos" || baseText.includes(cnaeFilter.toLowerCase());
 
       let matchesPeriod = true;
       if (period !== "todos") {
