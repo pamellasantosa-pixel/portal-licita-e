@@ -5,7 +5,6 @@ import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
-const PNCP_CONTRATACOES_BASE_URL = "https://pncp.gov.br/app/contratacoes";
 
 function parseGeminiText(raw) {
   if (!raw) return "";
@@ -14,12 +13,11 @@ function parseGeminiText(raw) {
 }
 
 function buildPncpSearchUrl(bid) {
-  // O campo `q` do PNCP é busca textual; queries longas podem não retornar nada.
-  // Preferimos buscar pelo `pncp_id` (quando existe) e, como fallback, por um pedaço do título.
+  // Busca resiliente: usar pncp_id (chave mais estável), sem filtrar status,
+  // para não ocultar editais que saíram de recebendo_proposta.
   const query = (bid?.pncp_id || bid?.title || "").toString().trim();
   const params = new URLSearchParams({
     q: query,
-    status: "recebendo_proposta",
     pagina: "1"
   });
   return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
@@ -35,35 +33,23 @@ function shouldEnrichBid(bid) {
 }
 
 function resolvePublicNoticeUrl(bid) {
+  const searchUrl = buildPncpSearchUrl(bid);
   const sourceUrl = bid?.source_url || "";
 
-  // Corrige registros antigos que foram salvos como `https://pncp.gov.br/compras/...` (404)
-  // e converte para a URL pública navegável `https://pncp.gov.br/app/contratacoes/...`.
-  if (sourceUrl.startsWith("https://pncp.gov.br/compras/")) {
-    const rest = sourceUrl.replace("https://pncp.gov.br/compras", "");
-    return `${PNCP_CONTRATACOES_BASE_URL}${rest}`;
-  }
-
-  // Corrige registros que foram salvos como `https://pncp.gov.br/app/compras/...`
-  if (sourceUrl.startsWith("https://pncp.gov.br/app/compras/")) {
-    const rest = sourceUrl.replace("https://pncp.gov.br/app/compras", "");
-    return `${PNCP_CONTRATACOES_BASE_URL}${rest}`;
-  }
-
-  if (sourceUrl.startsWith("/compras/")) {
-    const rest = sourceUrl.replace(/^\/compras/, "");
-    return `${PNCP_CONTRATACOES_BASE_URL}${rest}`;
-  }
-
   if (!sourceUrl) {
-    return buildPncpSearchUrl(bid);
+    return searchUrl;
   }
 
-  if (sourceUrl.startsWith("http") && !sourceUrl.includes("pncp.gov.br/compras/")) {
+  // Só tratamos como "visualizador" quando for PDF real. Para rotas PNCP, usa busca oficial.
+  if (/\.pdf($|\?)/i.test(sourceUrl)) {
     return sourceUrl;
   }
 
-  return buildPncpSearchUrl(bid);
+  if (sourceUrl.includes("pncp.gov.br") || sourceUrl.startsWith("/compras/")) {
+    return searchUrl;
+  }
+
+  return sourceUrl.startsWith("http") ? sourceUrl : searchUrl;
 }
 
 function canEmbedInIframe(url) {
@@ -83,7 +69,7 @@ export default function BidDetailsPage() {
   // Para o botão principal, sempre abre a busca oficial por `pncp_id` (mais resiliente).
   const portalUrl = buildPncpSearchUrl(bid);
 
-  // Para visualização/iframe, tentamos usar um deep link corrigido quando existir.
+  // Para visualização/iframe, só usamos URL quando for PDF.
   const editalUrl = resolvePublicNoticeUrl(bid);
   const iframeAllowed = canEmbedInIframe(editalUrl);
 
@@ -141,7 +127,7 @@ export default function BidDetailsPage() {
       }
 
       const result = await analyzeBidWithGemini({
-        pdfUrl: editalUrl,
+        pdfUrl: iframeAllowed ? editalUrl : portalUrl,
         bidTitle: bid.title,
         description: bid.description,
         organizationName: bid.organization_name,

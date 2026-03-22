@@ -78,7 +78,7 @@
 
   const summary = {
     method: "analise_heuristica_gratuita",
-    source_reference: pdfUrl || "https://pncp.gov.br/app/editais?status=recebendo_proposta&pagina=1",
+    source_reference: pdfUrl || "https://pncp.gov.br/app/editais?pagina=1",
     is_viable: isViable,
     score,
     confidence,
