@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
@@ -23,6 +23,15 @@ function buildPncpSearchUrl(bid) {
     pagina: "1"
   });
   return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
+}
+
+function shouldEnrichBid(bid) {
+  if (!bid?.pncp_id) return false;
+  if (!bid.source_url) return true;
+  if (bid.source_url.includes("pncp.gov.br/compras/")) return true;
+  if (bid.source_url.includes("pncp.gov.br/app/compras/")) return true;
+  if (!bid.description) return true;
+  return false;
 }
 
 function resolvePublicNoticeUrl(bid) {
@@ -69,7 +78,12 @@ export default function BidDetailsPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
   const [analysisRaw, setAnalysisRaw] = useState("");
+  const didEnrichRef = useRef(false);
 
+  // Para o botão principal, sempre abre a busca oficial por `pncp_id` (mais resiliente).
+  const portalUrl = buildPncpSearchUrl(bid);
+
+  // Para visualização/iframe, tentamos usar um deep link corrigido quando existir.
   const editalUrl = resolvePublicNoticeUrl(bid);
   const iframeAllowed = canEmbedInIframe(editalUrl);
 
@@ -80,6 +94,21 @@ export default function BidDetailsPage() {
       const data = await getBidById(id);
       setBid(data);
       setAnalysisRaw(data.ia_analysis_summary || "");
+
+      if (!didEnrichRef.current && shouldEnrichBid(data)) {
+        didEnrichRef.current = true;
+        const response = await fetch("/api/pncp-enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bidId: data.id, pncpId: data.pncp_id })
+        });
+        if (response.ok) {
+          const payload = await response.json().catch(() => null);
+          if (payload?.bid) {
+            setBid((current) => ({ ...current, ...payload.bid }));
+          }
+        }
+      }
     } catch (err) {
       setError(err.message || "Falha ao carregar detalhes do edital.");
     } finally {
@@ -95,6 +124,22 @@ export default function BidDetailsPage() {
     try {
       setIsAnalyzing(true);
       setError("");
+
+      if (!didEnrichRef.current && shouldEnrichBid(bid)) {
+        didEnrichRef.current = true;
+        const enrichResponse = await fetch("/api/pncp-enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bidId: bid.id, pncpId: bid.pncp_id })
+        });
+        if (enrichResponse.ok) {
+          const payload = await enrichResponse.json().catch(() => null);
+          if (payload?.bid) {
+            setBid((current) => ({ ...current, ...payload.bid }));
+          }
+        }
+      }
+
       const result = await analyzeBidWithGemini({
         pdfUrl: editalUrl,
         bidTitle: bid.title,
@@ -149,7 +194,7 @@ export default function BidDetailsPage() {
 
           <div className="mt-5 flex flex-wrap gap-3">
             <a
-              href={editalUrl}
+              href={portalUrl}
               target="_blank"
               rel="noreferrer"
               className="rounded-xl border border-brand-brown/20 bg-white px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-brand-brown"
