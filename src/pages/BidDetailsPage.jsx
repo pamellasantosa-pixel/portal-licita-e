@@ -70,6 +70,8 @@ function parsePncpControl(value) {
 }
 
 function extractCnpjFromBid(bid) {
+  const byColumn = String(bid?.orgao_cnpj || "").replace(/\D/g, "");
+  if (byColumn.length === 14) return byColumn;
   const parsed = parsePncpControl(bid?.pncp_id);
   if (parsed?.cnpj) return parsed.cnpj;
   const source = decodeRepeated(bid?.source_url || "");
@@ -77,14 +79,25 @@ function extractCnpjFromBid(bid) {
   return cnpjInPath?.[1] || "";
 }
 
-function buildPncpQuery(bid) {
+function generatePNCPUrl(bid) {
   const parsed = parsePncpControl(bid?.pncp_id);
-  if (parsed?.cnpj && parsed?.ano && parsed?.numero) {
+  const cnpj = extractCnpjFromBid(bid);
+
+  if (cnpj && parsed?.ano && parsed?.numero) {
     // Formato esperado: CNPJ-ANO-NUMERO.
-    return `${parsed.cnpj}-${parsed.ano}-${parsed.numero}`;
+    const params = new URLSearchParams({
+      q: `${cnpj}-${parsed.ano}-${parsed.numero}`,
+      pagina: "1"
+    });
+    return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
   }
-  if (parsed?.cnpj) return parsed.cnpj;
-  return decodeRepeated(bid?.pncp_id || bid?.title || "").trim();
+
+  const fallbackQuery = cnpj || decodeRepeated(bid?.pncp_id || bid?.title || "").trim();
+  const params = new URLSearchParams({
+    q: fallbackQuery,
+    pagina: "1"
+  });
+  return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
 }
 
 function toHttpsUrl(url) {
@@ -95,12 +108,7 @@ function toHttpsUrl(url) {
 }
 
 function buildPncpSearchUrl(bid) {
-  const query = buildPncpQuery(bid);
-  const params = new URLSearchParams({
-    q: query,
-    pagina: "1"
-  });
-  return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
+  return generatePNCPUrl(bid);
 }
 
 function buildPncpCnpjFallbackUrl(bid) {

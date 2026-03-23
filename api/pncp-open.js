@@ -58,7 +58,7 @@ function buildPncpQuery(pncpId) {
 function extractCnpj(pncpId, cnpjHint = "") {
   const parsed = parsePncpControl(pncpId);
   if (parsed?.cnpj) return parsed.cnpj;
-  const hint = String(cnpjHint || "").trim();
+  const hint = String(cnpjHint || "").replace(/\D/g, "");
   return /^\d{14}$/.test(hint) ? hint : "";
 }
 

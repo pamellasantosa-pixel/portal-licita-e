@@ -3,6 +3,29 @@ import { createClient } from "@supabase/supabase-js";
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
 
+function onlyDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function extractOrgaoCnpj(item = {}, sourcePath = "") {
+  const candidates = [
+    item.orgaoEntidade?.cnpj,
+    item.orgaoEntidade?.cnpjOrgaoEntidade,
+    item.unidadeOrgao?.codigoUnidade,
+    item.cnpj,
+    item.cnpjOrgao,
+    item.cnpj_origem,
+    sourcePath.match(/^\/compras\/(\d{14})\//)?.[1]
+  ];
+
+  for (const candidate of candidates) {
+    const cleaned = onlyDigits(candidate);
+    if (cleaned.length === 14) return cleaned;
+  }
+
+  return null;
+}
+
 function normalizePayload(payload) {
   if (Array.isArray(payload?.items)) return payload.items;
   if (Array.isArray(payload)) return payload;
@@ -19,6 +42,7 @@ function normalizePncpItem(item) {
     item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado";
 
   const sourcePath = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
+  const orgaoCnpj = extractOrgaoCnpj(item, sourcePath);
   const normalizedPath =
     sourcePath && sourcePath.startsWith("/compras/")
       ? `/app/contratacoes${sourcePath.replace(/^\/compras/, "")}`
@@ -36,6 +60,7 @@ function normalizePncpItem(item) {
     title,
     description,
     organization_name: organizationName,
+    orgao_cnpj: orgaoCnpj,
     source_url: sourceUrl,
     pncp_id: String(pncpControl || sequence || ""),
     modality: item.modalidade_licitacao_nome || item.modalidadeNome || item.modalidade || null,
@@ -93,6 +118,7 @@ export default async function handler(req, res) {
         title: normalized.title,
         description: normalized.description,
         organization_name: normalized.organization_name,
+        orgao_cnpj: normalized.orgao_cnpj,
         source_url: normalized.source_url,
         modality: normalized.modality,
         published_date: normalized.published_date,

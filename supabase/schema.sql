@@ -33,6 +33,7 @@ create table if not exists public.bids (
 
 -- Compatibilidade para cenarios em que o projeto esteja esperando colunas no padrao ESA.
 alter table public.bids add column if not exists orgao_nome text;
+alter table public.bids add column if not exists orgao_cnpj text;
 alter table public.bids add column if not exists objeto_descricao text;
 alter table public.bids add column if not exists valor_estimado numeric;
 alter table public.bids add column if not exists data_abertura timestamptz;
