@@ -4,6 +4,7 @@ import { getAllBids } from "../services/bidsService";
 import { useEffect } from "react";
 import MainNav from "../components/MainNav";
 import { createManualAlert, deleteManualAlert, getManualAlerts } from "../services/manualAlertsService";
+import { getActiveKeywords } from "../services/settingsService";
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
@@ -17,15 +18,23 @@ export default function CalendarPage() {
   const [alertDescription, setAlertDescription] = useState("");
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState("monthly");
+  const [onlyEsa, setOnlyEsa] = useState(true);
+  const [esaKeywords, setEsaKeywords] = useState([]);
 
   useEffect(() => {
     getAllBids().then(setBids).catch(() => setBids([]));
     getManualAlerts().then(setManualAlerts).catch(() => setManualAlerts([]));
+    getActiveKeywords().then(setEsaKeywords).catch(() => setEsaKeywords([]));
   }, []);
 
   const events = useMemo(() => {
     const bidEvents = bids
       .filter((item) => item.closing_date)
+      .filter((item) => {
+        if (!onlyEsa) return true;
+        const text = `${item.title || ""} ${item.description || ""} ${item.organization_name || ""}`.toLowerCase();
+        return esaKeywords.length === 0 || esaKeywords.some((kw) => text.includes(String(kw || "").toLowerCase()));
+      })
       .map((item) => ({
         type: "Prazo do edital",
         date: item.closing_date,
@@ -51,7 +60,7 @@ export default function CalendarPage() {
       const itemDate = new Date(item.date);
       return itemDate >= now && itemDate <= limitDate;
     });
-  }, [bids, manualAlerts, viewMode]);
+  }, [bids, manualAlerts, viewMode, onlyEsa, esaKeywords]);
 
   async function handleCreateAlert(event) {
     event.preventDefault();
@@ -90,7 +99,9 @@ export default function CalendarPage() {
       <div className="mx-auto mt-6 grid max-w-7xl gap-6 lg:grid-cols-[1.2fr_0.8fr]">
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
           <h1 className="font-heading text-3xl text-brand-brown">Calendario de Prazos</h1>
-          <p className="mt-2 font-body text-brand-ink/75">Visualizacao dos prazos de fechamento e alertas manuais.</p>
+          <p className="mt-2 font-body text-brand-ink/75">
+            Mostra prazos de fechamento dos editais + alertas manuais criados por voce. Opcionalmente, filtra apenas editais aderentes ao perfil ESA.
+          </p>
           <div className="mt-3 flex gap-2">
             <button
               onClick={() => setViewMode("weekly")}
@@ -110,6 +121,10 @@ export default function CalendarPage() {
             >
               Mensal
             </button>
+            <label className="ml-2 flex items-center gap-2 rounded-lg bg-brand-sand px-3 py-2 font-body text-xs text-brand-brown">
+              <input type="checkbox" checked={onlyEsa} onChange={(event) => setOnlyEsa(event.target.checked)} />
+              Somente aderentes ESA
+            </label>
           </div>
 
           <div className="mt-5 overflow-x-auto rounded-xl border border-brand-brown/10">

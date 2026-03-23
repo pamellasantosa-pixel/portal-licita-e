@@ -8,6 +8,7 @@ export default function SettingsPage() {
   );
   const [cnaes, setCnaes] = useState("7320-3/00, 7490-1/99, 7020-4/00, 7220-7/00, 6201-5/01");
   const [emailNotifications, setEmailNotifications] = useState(true);
+  const [authEmail, setAuthEmail] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -18,6 +19,7 @@ export default function SettingsPage() {
         if (data.keywords) setKeywords(data.keywords);
         if (data.cnaes) setCnaes(data.cnaes);
         setEmailNotifications(Boolean(data.emailNotifications));
+        setAuthEmail(data.authEmail || "");
       })
       .catch((err) => {
         setError(err.message || "Falha ao carregar configuracoes.");
@@ -80,6 +82,12 @@ export default function SettingsPage() {
             />
             Receber notificacoes por e-mail
           </label>
+
+          <div className="rounded-xl border border-brand-brown/15 bg-brand-sand/40 px-4 py-3 font-body text-sm text-brand-ink/80">
+            {authEmail
+              ? `E-mail de destino atual (conta logada): ${authEmail}`
+              : "Nenhum e-mail de autenticacao identificado nesta sessao. Entre com uma conta Supabase para habilitar envio real."}
+          </div>
 
           <button
             disabled={isSaving}

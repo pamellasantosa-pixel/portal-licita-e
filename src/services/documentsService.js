@@ -31,3 +31,11 @@ export async function uploadDocumentFile({ file, folder = "uploads" }) {
     fileType: ext.toLowerCase()
   };
 }
+
+export async function deleteDocumentById(documentId) {
+  const supabase = getSupabaseClientOrThrow();
+  if (!documentId) throw new Error("ID do documento obrigatorio.");
+
+  const { error } = await supabase.from("documents").delete().eq("id", documentId);
+  if (error) throw new Error(`Falha ao excluir documento: ${error.message}`);
+}

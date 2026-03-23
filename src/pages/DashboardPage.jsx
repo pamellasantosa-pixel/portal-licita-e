@@ -6,6 +6,9 @@ import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
 import { getActiveKeywords } from "../services/settingsService";
 
+const AUTO_SYNC_KEY = "licitae_dashboard_last_auto_sync";
+const AUTO_SYNC_INTERVAL_MS = 1000 * 60 * 60 * 3; // 3 horas
+
 function dateToBrazilian(dateLike) {
   return new Intl.DateTimeFormat("pt-BR", {
     dateStyle: "short",
@@ -30,9 +33,25 @@ export default function DashboardPage() {
         setWarnings([]);
         const data = await getTodayBids();
         setBids(data);
+
+        const lastSync = Number(localStorage.getItem(AUTO_SYNC_KEY) || "0");
+        const shouldAutoSync = !lastSync || Date.now() - lastSync > AUTO_SYNC_INTERVAL_MS || data.length === 0;
+
+        if (shouldAutoSync) {
+          setIsSyncing(true);
+          const customKeywords = await getActiveKeywords().catch(() => []);
+          const result = await syncPncBids(customKeywords);
+          if (result.warnings?.length) {
+            setWarnings(result.warnings);
+          }
+          localStorage.setItem(AUTO_SYNC_KEY, String(Date.now()));
+          const updated = await getTodayBids();
+          setBids(updated);
+        }
       } catch (err) {
         setError(err.message || "Falha ao carregar editais de hoje.");
       } finally {
+        setIsSyncing(false);
         setIsLoading(false);
       }
     }

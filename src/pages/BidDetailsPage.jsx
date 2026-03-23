@@ -23,6 +23,13 @@ function buildPncpSearchUrl(bid) {
   return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
 }
 
+function buildPortalUrl(bid) {
+  if (bid?.pncp_id) {
+    return `/api/pncp-open?pncp_id=${encodeURIComponent(bid.pncp_id)}`;
+  }
+  return buildPncpSearchUrl(bid);
+}
+
 function shouldEnrichBid(bid) {
   if (!bid?.pncp_id) return false;
   if (!bid.source_url) return true;
@@ -67,7 +74,7 @@ export default function BidDetailsPage() {
   const didEnrichRef = useRef(false);
 
   // Para o botão principal, sempre abre a busca oficial por `pncp_id` (mais resiliente).
-  const portalUrl = buildPncpSearchUrl(bid);
+  const portalUrl = buildPortalUrl(bid);
 
   // Para visualização/iframe, só usamos URL quando for PDF.
   const editalUrl = resolvePublicNoticeUrl(bid);
@@ -135,11 +142,16 @@ export default function BidDetailsPage() {
         pncpId: bid.pncp_id
       });
       const raw = parseGeminiText(result.raw || "");
-      await updateBidStatus(bid.id, {
-        ia_analysis_summary: raw,
-        status: "em_analise"
-      });
       setAnalysisRaw(raw);
+
+      try {
+        await updateBidStatus(bid.id, {
+          ia_analysis_summary: raw,
+          status: "em_analise"
+        });
+      } catch (saveErr) {
+        setError(saveErr.message || "Analise gerada, mas nao foi possivel salvar no banco.");
+      }
     } catch (err) {
       setError(err.message || "Falha ao gerar analise com IA.");
     } finally {

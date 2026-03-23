@@ -23,7 +23,8 @@ export async function loadSystemSettings() {
   return {
     keywords: (filtersResult.data || []).map((row) => row.keyword).join(", ") || fallback.keywords || "",
     cnaes: (cnaeResult.data || []).map((row) => row.cnae_code).join(", ") || fallback.cnaes || "",
-    emailNotifications: notificationResult?.data?.email_notifications ?? true
+    emailNotifications: notificationResult?.data?.email_notifications ?? true,
+    authEmail: user?.email || ""
   };
 }
 

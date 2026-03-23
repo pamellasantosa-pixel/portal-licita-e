@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
-import { uploadDocumentFile } from "../services/documentsService";
+import { deleteDocumentById, uploadDocumentFile } from "../services/documentsService";
 
 function daysUntil(dateLike) {
   if (!dateLike) return null;
@@ -94,6 +94,16 @@ export default function DocumentsPage() {
       setError(err.message || "Falha ao salvar documento.");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteDocument(documentId) {
+    try {
+      setError("");
+      await deleteDocumentById(documentId);
+      await loadDocuments();
+    } catch (err) {
+      setError(err.message || "Falha ao excluir documento.");
     }
   }
 
@@ -191,6 +201,12 @@ export default function DocumentsPage() {
                   <a href={doc.file_url} target="_blank" rel="noreferrer" className="font-body text-xs text-brand-cyan underline">
                     Download
                   </a>
+                  <button
+                    onClick={() => handleDeleteDocument(doc.id)}
+                    className="rounded-lg border border-red-200 px-3 py-1 font-body text-xs text-red-700"
+                  >
+                    Excluir
+                  </button>
                 </li>
               ))}
             </ul>
