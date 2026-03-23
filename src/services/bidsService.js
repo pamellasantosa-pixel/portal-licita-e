@@ -71,32 +71,6 @@ export async function getBidById(id) {
   return data;
 }
 
-export async function getBidCaptureSignalsById(id) {
-  const supabase = getSupabaseClientOrThrow();
-
-  const { data, error } = await supabase.rpc("get_filtered_bids", {
-    p_search: null,
-    p_from_date: null,
-    p_to_date: null,
-    p_status: "todos",
-    p_limit: 500
-  });
-
-  if (error) {
-    throw new Error(`Erro ao carregar score de captura: ${error.message}`);
-  }
-
-  const row = (data || []).find((item) => item.id === id);
-  if (!row) {
-    return { aderencia_score: null, alta_aderencia: null };
-  }
-
-  return {
-    aderencia_score: row.aderencia_score ?? null,
-    alta_aderencia: row.alta_aderencia ?? null
-  };
-}
-
 export async function updateBidStatus(id, patch) {
   const supabase = getSupabaseClientOrThrow();
 
