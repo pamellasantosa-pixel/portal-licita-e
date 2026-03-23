@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
-import { getBidById, updateBidStatus } from "../services/bidsService";
+import { getBidById, getBidCaptureSignalsById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
@@ -159,6 +159,7 @@ export default function BidDetailsPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
   const [analysisRaw, setAnalysisRaw] = useState("");
+  const [captureSignals, setCaptureSignals] = useState({ aderencia_score: null, alta_aderencia: null });
   const didEnrichRef = useRef(false);
 
   // Botao principal abre busca pre-preenchida por orgao_cnpj.
@@ -177,6 +178,13 @@ export default function BidDetailsPage() {
       const data = await getBidById(id);
       setBid(data);
       setAnalysisRaw(data.ia_analysis_summary || "");
+
+      try {
+        const capture = await getBidCaptureSignalsById(data.id);
+        setCaptureSignals(capture);
+      } catch {
+        setCaptureSignals({ aderencia_score: null, alta_aderencia: null });
+      }
 
       if (!didEnrichRef.current && shouldEnrichBid(data)) {
         didEnrichRef.current = true;
@@ -343,6 +351,17 @@ export default function BidDetailsPage() {
           {analysis && (
             <div className="mt-4 space-y-4">
               <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={[
+                    "rounded-full px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide",
+                    captureSignals.alta_aderencia ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                  ].join(" ")}
+                >
+                  {captureSignals.alta_aderencia ? "Aderencia Captura: alta" : "Aderencia Captura: baixa"}
+                </span>
+                <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
+                  Score Captura: {captureSignals.aderencia_score ?? "-"}
+                </span>
                 <span
                   className={[
                     "rounded-full px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide",
