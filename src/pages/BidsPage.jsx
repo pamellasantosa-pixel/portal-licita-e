@@ -17,6 +17,20 @@ function formatCurrencyBRL(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
 }
 
+const NEGATIVE_HIDE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia", "aquisicao de materiais"];
+
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function hasNegativeTerm(text) {
+  const lowered = normalizeText(text);
+  return NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term)));
+}
+
 function extractMunicipioEstado(orgaoNome = "") {
   const text = String(orgaoNome || "").trim();
   if (!text) return { municipio: "Municipio nao informado", estado: "UF nao informada" };
@@ -96,7 +110,8 @@ export default function BidsPage() {
         cnae_principal: row.cnae_principal || ""
       }));
 
-      setBids(normalized);
+      const hiddenFiltered = normalized.filter((row) => !hasNegativeTerm(`${row.title} ${row.description || ""}`));
+      setBids(hiddenFiltered);
     } catch (err) {
       setError(err.message || "Falha ao carregar editais.");
     } finally {

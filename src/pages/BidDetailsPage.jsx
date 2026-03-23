@@ -445,6 +445,24 @@ export default function BidDetailsPage() {
                 <p className="font-body text-sm text-brand-ink/90">{analysis.justification || "Sem justificativa."}</p>
               </div>
 
+              {analysis.objeto_esa_resumo && (
+                <div className="rounded-xl border border-brand-brown/10 p-4">
+                  <h3 className="font-heading text-sm text-brand-brown">Resumo do Objeto ESA</h3>
+                  <p className="mt-2 font-body text-sm text-brand-ink/90">Comunidade afetada:</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5 font-body text-sm text-brand-ink/90">
+                    {(analysis.objeto_esa_resumo.comunidade_afetada || []).map((item, idx) => (
+                      <li key={`comunidade-${idx}`}>{item}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-3 font-body text-sm text-brand-ink/90">Entregaveis tecnicos:</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5 font-body text-sm text-brand-ink/90">
+                    {(analysis.objeto_esa_resumo.entregaveis_tecnicos || []).map((item, idx) => (
+                      <li key={`entregavel-${idx}`}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="rounded-xl border border-brand-brown/10 p-4">
                   <h3 className="font-heading text-sm text-brand-brown">Palavras encontradas</h3>

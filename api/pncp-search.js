@@ -15,6 +15,23 @@ import {
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
 
+const ESA_PRIORITY_RULES = [
+  ["clpi", "consulta livre previa e informada", "consulta previa", "consulta livre"],
+  ["quilombola", "componente quilombola"],
+  ["indigena", "indigena", "componente indigena"],
+  ["diagnostico socioambiental"],
+  ["convencao 169 oit", "convencao 169", "oit 169"],
+  ["mediacao de conflitos", "mediacao de conflitos territoriais", "mediacao"]
+];
+
+const NEGATIVE_HIDE_TERMS = [
+  "pavimentacao",
+  "pavimentacao",
+  "brinquedos",
+  "obras de engenharia",
+  "aquisicao de materiais"
+];
+
 function onlyDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -170,6 +187,26 @@ function normalizePayload(payload) {
 
 function scoreBid(text, profile, ticketValue = null) {
   const lowered = normalizeText(text);
+  const hasNegativeBlocker = NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term)));
+
+  if (hasNegativeBlocker) {
+    return {
+      total: 0,
+      keywordHits: 0,
+      nicheHits: 0,
+      projectHits: 0,
+      requiredHits: 0,
+      exclusionHits: 0,
+      territoryHits: 0,
+      cnaeHits: 0,
+      orgHits: 0,
+      ticketKnown: false,
+      ticketInRange: false,
+      strongMatch: false,
+      shouldHide: true
+    };
+  }
+
   const keywordHits = profile.keywords.filter((keyword) => lowered.includes(normalizeText(keyword))).length;
   const nicheHits = profile.niches.filter((term) => lowered.includes(normalizeText(term))).length;
   const projectHits = profile.projects.filter((term) => lowered.includes(normalizeText(term))).length;
@@ -182,9 +219,12 @@ function scoreBid(text, profile, ticketValue = null) {
   const ticketKnown = ticketValue != null;
   const ticketInRange = ticketKnown ? ticketValue >= MIN_TICKET && ticketValue <= MAX_TICKET : true;
   const ticketScore = !ticketKnown ? 0 : ticketInRange ? 3 : -2;
+  const priorityHits = ESA_PRIORITY_RULES.filter((group) => group.some((term) => lowered.includes(normalizeText(term)))).length;
+  const priorityScore = priorityHits * 10;
 
   // Score com pesos por aderencia ao perfil da Expressao Socioambiental.
   const total =
+    priorityScore +
     keywordHits * 4 +
     nicheHits * 3 +
     projectHits * 2 +
@@ -207,7 +247,8 @@ function scoreBid(text, profile, ticketValue = null) {
     orgHits,
     ticketKnown,
     ticketInRange,
-    strongMatch: keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0
+    strongMatch: priorityHits > 0 || keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0,
+    shouldHide: false
   };
 }
 
@@ -341,6 +382,7 @@ export default async function handler(req, res) {
         const relevance = scoreBid(text, profile, ticketValue);
         return { bid, relevance, ticketValue };
       })
+      .filter((row) => !row.relevance.shouldHide)
       .sort((a, b) => b.relevance.total - a.relevance.total);
 
     const highMatches = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 8);

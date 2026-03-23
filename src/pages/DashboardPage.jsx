@@ -137,7 +137,7 @@ export default function DashboardPage() {
 
         <section className="grid gap-4 md:grid-cols-3">
           <article className="rounded-2xl border border-brand-brown/10 bg-white p-5 shadow-panel">
-            <p className="font-body text-sm text-brand-ink/70">Licitacoes de hoje</p>
+            <p className="font-body text-sm text-brand-ink/70">Oportunidades Estrategicas ESA</p>
             <p className="font-heading text-3xl text-brand-brown">{stats.total}</p>
           </article>
           <article className="rounded-2xl border border-brand-brown/10 bg-white p-5 shadow-panel">

@@ -18,6 +18,31 @@ function normalizeText(value) {
 
 function scoreWithProfile(text) {
   const lowered = normalizeText(text);
+  const priorityRules = [
+    ["clpi", "consulta livre previa e informada", "consulta previa", "consulta livre"],
+    ["quilombola", "componente quilombola"],
+    ["indigena", "indigena", "componente indigena"],
+    ["diagnostico socioambiental"],
+    ["convencao 169 oit", "convencao 169", "oit 169"],
+    ["mediacao de conflitos", "mediacao de conflitos territoriais", "mediacao"]
+  ];
+  const negativeBlockers = ["pavimentacao", "brinquedos", "obras de engenharia", "aquisicao de materiais"];
+
+  if (negativeBlockers.some((term) => lowered.includes(normalizeText(term)))) {
+    return {
+      score: 0,
+      keywordHits: 0,
+      nicheHits: 0,
+      projectHits: 0,
+      requiredHits: 0,
+      cnaeHits: 0,
+      orgHits: 0,
+      territoryHits: 0,
+      exclusionHits: 0
+    };
+  }
+
+  const priorityHits = priorityRules.filter((group) => group.some((term) => lowered.includes(normalizeText(term)))).length;
   const keywordHits = KEYWORDS.filter((term) => lowered.includes(normalizeText(term))).length;
   const nicheHits = NICHES.filter((term) => lowered.includes(normalizeText(term))).length;
   const projectHits = PROJECT_TERMS.filter((term) => lowered.includes(normalizeText(term))).length;
@@ -28,6 +53,7 @@ function scoreWithProfile(text) {
   const exclusionHits = EXCLUSION_TERMS.filter((term) => lowered.includes(normalizeText(term))).length;
 
   const score =
+    priorityHits * 10 +
     keywordHits * 4 +
     nicheHits * 3 +
     projectHits * 2 +
@@ -48,6 +74,33 @@ function scoreWithProfile(text) {
     territoryHits,
     exclusionHits
   };
+}
+
+function extractCommunitySummary(text) {
+  const lowered = normalizeText(text);
+  const communities = [];
+  if (lowered.includes("quilombola")) communities.push("comunidades quilombolas");
+  if (lowered.includes("indigena") || lowered.includes("indigena")) communities.push("povos indigenas");
+  if (lowered.includes("comunidades tradicionais")) communities.push("comunidades tradicionais");
+  if (lowered.includes("ribeirinh")) communities.push("comunidades ribeirinhas");
+  if (lowered.includes("territorio")) communities.push("populacao de territorios afetados");
+  return communities.length > 0 ? Array.from(new Set(communities)) : ["Nao identificado no texto do objeto"];
+}
+
+function extractTechnicalDeliverables(text) {
+  const lowered = normalizeText(text);
+  const candidates = [
+    { key: "oficinas", label: "oficinas participativas" },
+    { key: "relatorio", label: "relatorios tecnicos" },
+    { key: "diagnostico", label: "diagnostico socioambiental" },
+    { key: "plano de trabalho", label: "plano de trabalho" },
+    { key: "consulta", label: "processos de consulta" },
+    { key: "mapeamento", label: "mapeamento territorial/social" },
+    { key: "monitoramento", label: "monitoramento de condicionantes" }
+  ];
+
+  const found = candidates.filter((item) => lowered.includes(item.key)).map((item) => item.label);
+  return found.length > 0 ? Array.from(new Set(found)) : ["Entregaveis tecnicos nao explicitados no texto"];
 }
 
 export default async function handler(req, res) {
@@ -109,6 +162,11 @@ export default async function handler(req, res) {
       orgHits: profileScore.orgHits,
       territoryHits: profileScore.territoryHits,
       exclusionHits: profileScore.exclusionHits
+    },
+    objeto_esa_resumo: {
+      comunidade_afetada: extractCommunitySummary(normalized),
+      entregaveis_tecnicos: extractTechnicalDeliverables(normalized),
+      sintese: "Resumo automatico focado em comunidade impactada e entregaveis tecnicos para triagem ESA."
     },
     justification: isViable
       ? "Ha sinais consistentes de aderencia ao perfil socioambiental com base na mesma regua de captura usada na listagem."
