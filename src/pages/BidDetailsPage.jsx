@@ -349,10 +349,10 @@ export default function BidDetailsPage() {
                     analysis.is_viable ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-700"
                   ].join(" ")}
                 >
-                  {analysis.is_viable ? "Viavel para concorrer" : "Baixa aderencia"}
+                  {analysis.is_viable ? "Viabilidade IA: alta" : "Viabilidade IA: baixa"}
                 </span>
                 <span className="rounded-full bg-brand-cyan/10 px-3 py-1 font-body text-xs font-semibold text-brand-cyan">
-                  Score: {analysis.score ?? "-"}
+                  Score IA: {analysis.score ?? "-"}
                 </span>
                 <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
                   Confianca: {analysis.confidence ?? "-"}%
