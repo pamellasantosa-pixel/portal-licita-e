@@ -31,6 +31,116 @@ create table if not exists public.bids (
   updated_at timestamptz not null default now()
 );
 
+-- Compatibilidade para cenarios em que o projeto esteja esperando colunas no padrao ESA.
+alter table public.bids add column if not exists orgao_nome text;
+alter table public.bids add column if not exists objeto_descricao text;
+alter table public.bids add column if not exists valor_estimado numeric;
+alter table public.bids add column if not exists data_abertura timestamptz;
+alter table public.bids add column if not exists cnae_principal text;
+alter table public.bids add column if not exists link_edital text;
+
+create or replace function public.get_filtered_bids(
+  p_search text default null,
+  p_from_date timestamptz default null,
+  p_to_date timestamptz default null,
+  p_status text default 'todos',
+  p_limit integer default 200
+)
+returns table (
+  id uuid,
+  orgao_nome text,
+  objeto_descricao text,
+  valor_estimado numeric,
+  data_abertura timestamptz,
+  cnae_principal text,
+  link_edital text,
+  status text,
+  alta_aderencia boolean,
+  aderencia_score integer
+)
+language sql
+stable
+as $$
+  with base as (
+    select
+      b.id,
+      coalesce(b.orgao_nome, b.organization_name, '') as orgao_nome,
+      coalesce(b.objeto_descricao, b.description, b.title, '') as objeto_descricao,
+      coalesce(b.valor_estimado, null) as valor_estimado,
+      coalesce(b.data_abertura, b.published_date) as data_abertura,
+      b.cnae_principal,
+      coalesce(b.link_edital, b.source_url) as link_edital,
+      b.status,
+      lower(
+        coalesce(b.objeto_descricao, b.description, b.title, '') || ' ' ||
+        coalesce(b.orgao_nome, b.organization_name, '') || ' ' ||
+        coalesce(b.cnae_principal, '')
+      ) as corpus
+    from public.bids b
+  ),
+  scored as (
+    select
+      base.*,
+      (
+        (case when base.corpus like '%clpi%' then 6 else 0 end) +
+        (case when base.corpus like '%consulta previa%' then 6 else 0 end) +
+        (case when base.corpus like '%quilombola%' then 6 else 0 end) +
+        (case when base.corpus like '%indigena%' then 6 else 0 end) +
+        (case when base.corpus like '%diagnostico socioambiental%' then 8 else 0 end) +
+        (case when base.corpus like '%componente quilombola%' then 8 else 0 end) +
+        (case when base.corpus like '%convencao 169%' then 8 else 0 end) +
+        (case when base.corpus like '%oit%' then 2 else 0 end) +
+        (case when base.cnae_principal in ('7320-3/00', '7490-1/99') then 10 else 0 end) +
+        (case when base.valor_estimado between 50000 and 5000000 then 4 else 0 end) -
+        (case when base.corpus like '%asfalto%' then 10 else 0 end) -
+        (case when base.corpus like '%pavimentacao%' then 10 else 0 end) -
+        (case when base.corpus like '%recapeamento%' then 10 else 0 end) -
+        (case when base.corpus like '%merenda%' then 8 else 0 end) -
+        (case when base.corpus like '%medicamento%' then 8 else 0 end) -
+        (case when base.corpus like '%limpeza urbana%' then 10 else 0 end) -
+        (case when base.corpus like '%tapa-buraco%' then 10 else 0 end)
+      )::int as aderencia_score,
+      (
+        base.corpus like '%clpi%' or
+        base.corpus like '%consulta previa%' or
+        base.corpus like '%quilombola%' or
+        base.corpus like '%indigena%' or
+        base.corpus like '%diagnostico socioambiental%' or
+        base.corpus like '%componente quilombola%' or
+        base.corpus like '%convencao 169%'
+      ) as alta_aderencia
+    from base
+  )
+  select
+    s.id,
+    s.orgao_nome,
+    s.objeto_descricao,
+    s.valor_estimado,
+    s.data_abertura,
+    s.cnae_principal,
+    s.link_edital,
+    s.status,
+    s.alta_aderencia,
+    s.aderencia_score
+  from scored s
+  where
+    (p_status = 'todos' or s.status = p_status)
+    and (p_from_date is null or s.data_abertura >= p_from_date)
+    and (p_to_date is null or s.data_abertura <= p_to_date)
+    and (
+      p_search is null
+      or p_search = ''
+      or s.corpus like '%' || lower(p_search) || '%'
+    )
+    and s.aderencia_score > 0
+  order by
+    s.alta_aderencia desc,
+    (case when s.cnae_principal in ('7320-3/00', '7490-1/99') then 0 else 1 end) asc,
+    s.aderencia_score desc,
+    s.data_abertura desc nulls last
+  limit greatest(1, least(coalesce(p_limit, 200), 500));
+$$;
+
 create table if not exists public.documents (
   id uuid primary key default gen_random_uuid(),
   bid_id uuid references public.bids(id) on delete set null,

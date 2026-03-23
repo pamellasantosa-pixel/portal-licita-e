@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getAllBids } from "../services/bidsService";
 import { syncPncBids } from "../services/pncpService";
 import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
+import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -28,8 +28,46 @@ export default function BidsPage() {
     try {
       setIsLoading(true);
       setError("");
-      const data = await getAllBids();
-      setBids(data);
+      const supabase = getSupabaseClientOrThrow();
+
+      let fromDate = null;
+      if (period !== "todos") {
+        const days = period === "7dias" ? 7 : 30;
+        const from = new Date();
+        from.setDate(from.getDate() - days);
+        fromDate = from.toISOString();
+      }
+
+      const rpcSearch = [search, keywordFilter !== "todos" ? keywordFilter : "", cnaeFilter !== "todos" ? cnaeFilter : ""]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      const { data, error: rpcError } = await supabase.rpc("get_filtered_bids", {
+        p_search: rpcSearch || null,
+        p_from_date: fromDate,
+        p_to_date: null,
+        p_status: status,
+        p_limit: 200
+      });
+
+      if (rpcError) throw new Error(rpcError.message);
+
+      const normalized = (data || []).map((row) => ({
+        id: row.id,
+        title: row.objeto_descricao || "Sem titulo",
+        description: row.objeto_descricao || "",
+        organization_name: row.orgao_nome || "Orgao nao informado",
+        published_date: row.data_abertura,
+        closing_date: null,
+        status: row.status || "em_analise",
+        source_url: row.link_edital,
+        alta_aderencia: Boolean(row.alta_aderencia),
+        aderencia_score: row.aderencia_score || 0,
+        cnae_principal: row.cnae_principal || ""
+      }));
+
+      setBids(normalized);
     } catch (err) {
       setError(err.message || "Falha ao carregar editais.");
     } finally {
@@ -38,10 +76,16 @@ export default function BidsPage() {
   }
 
   useEffect(() => {
-    loadBids();
     getActiveKeywords().then(setAvailableKeywords).catch(() => setAvailableKeywords([]));
     getActiveCnaes().then(setAvailableCnaes).catch(() => setAvailableCnaes([]));
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadBids();
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [search, status, period, keywordFilter, cnaeFilter]);
 
   async function handleSync() {
     try {
@@ -61,25 +105,7 @@ export default function BidsPage() {
     }
   }
 
-  const filtered = useMemo(() => {
-    return bids.filter((item) => {
-      const baseText = `${item.title} ${item.description || ""} ${item.organization_name || ""}`.toLowerCase();
-      const matchesSearch = baseText.includes(search.toLowerCase());
-      const matchesStatus = status === "todos" || item.status === status;
-      const matchesKeyword = keywordFilter === "todos" || baseText.includes(keywordFilter.toLowerCase());
-      const matchesCnae = cnaeFilter === "todos" || baseText.includes(cnaeFilter.toLowerCase());
-
-      let matchesPeriod = true;
-      if (period !== "todos") {
-        const days = period === "7dias" ? 7 : 30;
-        const from = new Date();
-        from.setDate(from.getDate() - days);
-        matchesPeriod = new Date(item.published_date) >= from;
-      }
-
-      return matchesSearch && matchesStatus && matchesPeriod && matchesKeyword && matchesCnae;
-    });
-  }, [bids, search, status, period, keywordFilter, cnaeFilter]);
+  const filtered = useMemo(() => bids, [bids]);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-brand-sand via-[#FFFDFB] to-[#F2F8F9] px-6 py-8">
@@ -159,7 +185,11 @@ export default function BidsPage() {
             </p>
           )}
 
-          {isLoading && <p className="font-body text-brand-ink/80">Carregando editais...</p>}
+          {isLoading && (
+            <p className="font-body text-brand-ink/80">
+              Minerando editais especificos para a Expressao Socioambiental (CNAE, nicho e termos obrigatorios)...
+            </p>
+          )}
 
           {!isLoading && filtered.length === 0 && (
             <p className="font-body text-brand-ink/80">Nenhum edital encontrado para o filtro informado.</p>
@@ -171,6 +201,21 @@ export default function BidsPage() {
                 <li key={bid.id} className="rounded-xl border border-brand-brown/10 p-4">
                   <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                     <div>
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        {bid.alta_aderencia && (
+                          <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                            Alta Aderencia
+                          </span>
+                        )}
+                        <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-brand-cyan">
+                          Score {bid.aderencia_score}
+                        </span>
+                        {bid.cnae_principal && (
+                          <span className="rounded-full border border-brand-brown/20 bg-brand-sand px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
+                            CNAE {bid.cnae_principal}
+                          </span>
+                        )}
+                      </div>
                       <h3 className="font-heading text-lg text-brand-brown">{bid.title}</h3>
                       <p className="font-body text-sm text-brand-ink/80">{bid.organization_name || "Orgao nao informado"}</p>
                       <p className="mt-1 font-body text-xs text-brand-ink/60">
