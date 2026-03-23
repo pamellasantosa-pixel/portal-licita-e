@@ -55,7 +55,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { pdfUrl, bidTitle, description, organizationName, modality, pncpId } = req.body || {};
+  const { pdfUrl, bidTitle, description, organizationName, modality, pncpId, guidelines } = req.body || {};
   const normalized = normalizeText(
     `${bidTitle || ""} ${description || ""} ${organizationName || ""} ${modality || ""} ${pncpId || ""} ${pdfUrl || ""}`
       .replace(/\s+/g, " ")
@@ -92,6 +92,7 @@ export default async function handler(req, res) {
 
   const summary = {
     method: "analise_heuristica_gratuita",
+    guidelines: guidelines || "Diretrizes ESA padrao",
     source_reference: pdfUrl || "https://pncp.gov.br/app/editais?pagina=1",
     is_viable: isViable,
     score,

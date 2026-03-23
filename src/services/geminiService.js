@@ -1,8 +1,8 @@
-export async function analyzeBidWithGemini({ pdfUrl, bidTitle, description, organizationName, modality, pncpId }) {
+export async function analyzeBidWithGemini({ pdfUrl, bidTitle, description, organizationName, modality, pncpId, guidelines }) {
   const response = await fetch("/api/analyze-edital", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pdfUrl, bidTitle, description, organizationName, modality, pncpId })
+    body: JSON.stringify({ pdfUrl, bidTitle, description, organizationName, modality, pncpId, guidelines })
   });
 
   if (!response.ok) {

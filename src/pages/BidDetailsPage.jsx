@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
-import { getBidById, getBidCaptureSignalsById, updateBidStatus } from "../services/bidsService";
+import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
@@ -80,16 +80,8 @@ function extractCnpjFromBid(bid) {
 }
 
 function generatePNCPUrl(bid) {
-  const cnpj = extractCnpjFromBid(bid);
-  if (cnpj) {
-    return `${PNCP_EDITAIS_BASE_URL}?q=${cnpj}`;
-  }
-
-  const parsed = parsePncpControl(bid?.pncp_id);
-  if (parsed?.cnpj) {
-    return `${PNCP_EDITAIS_BASE_URL}?q=${parsed.cnpj}`;
-  }
-
+  const cnpj = String(bid?.orgao_cnpj || "").replace(/\D/g, "");
+  if (cnpj.length === 14) return `${PNCP_EDITAIS_BASE_URL}?q=${cnpj}&pagina=1`;
   return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
 }
 
@@ -152,6 +144,41 @@ function canEmbedInIframe(url) {
   return url.startsWith("https://") && /\.pdf($|\?)/i.test(url);
 }
 
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function calculateRealtimeEsaScore(bid) {
+  const corpus = normalizeText(
+    `${bid?.title || ""} ${bid?.description || ""} ${bid?.organization_name || ""} ${bid?.modality || ""} ${bid?.pncp_id || ""}`
+  );
+
+  const rules = [
+    { label: "CLPI", points: 6, terms: ["clpi", "consulta livre", "consulta previa", "convencao 169"] },
+    { label: "Quilombola", points: 6, terms: ["quilombola", "componente quilombola"] },
+    { label: "Diagnostico Socioambiental", points: 8, terms: ["diagnostico socioambiental"] }
+  ];
+
+  let score = 0;
+  const matched = [];
+
+  for (const rule of rules) {
+    if (rule.terms.some((term) => corpus.includes(normalizeText(term)))) {
+      score += rule.points;
+      matched.push(rule.label);
+    }
+  }
+
+  return {
+    score,
+    matched,
+    isHighAdherence: score >= 6
+  };
+}
+
 export default function BidDetailsPage() {
   const { id } = useParams();
   const [bid, setBid] = useState(null);
@@ -159,7 +186,6 @@ export default function BidDetailsPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
   const [analysisRaw, setAnalysisRaw] = useState("");
-  const [captureSignals, setCaptureSignals] = useState({ aderencia_score: null, alta_aderencia: null });
   const didEnrichRef = useRef(false);
 
   // Botao principal abre busca pre-preenchida por orgao_cnpj.
@@ -170,6 +196,7 @@ export default function BidDetailsPage() {
   const cnpjFallbackUrl = buildPncpCnpjFallbackUrl(bid);
   const iframeAllowed = canEmbedInIframe(editalUrl);
   const analysis = parseAnalysisJson(analysisRaw);
+  const esaRealtime = calculateRealtimeEsaScore(bid);
 
   async function loadBid() {
     try {
@@ -177,14 +204,8 @@ export default function BidDetailsPage() {
       setError("");
       const data = await getBidById(id);
       setBid(data);
-      setAnalysisRaw(data.ia_analysis_summary || "");
-
-      try {
-        const capture = await getBidCaptureSignalsById(data.id);
-        setCaptureSignals(capture);
-      } catch {
-        setCaptureSignals({ aderencia_score: null, alta_aderencia: null });
-      }
+      // Evita mostrar analise antiga em cache como se fosse avaliacao em tempo real.
+      setAnalysisRaw("");
 
       if (!didEnrichRef.current && shouldEnrichBid(data)) {
         didEnrichRef.current = true;
@@ -211,12 +232,16 @@ export default function BidDetailsPage() {
     loadBid();
   }, [id]);
 
-  async function handleAnalyze() {
+  async function handleAnalyze(forceRefresh = false) {
     try {
       setIsAnalyzing(true);
       setError("");
 
-      if (!didEnrichRef.current && shouldEnrichBid(bid)) {
+      if (forceRefresh) {
+        didEnrichRef.current = false;
+      }
+
+      if ((forceRefresh || !didEnrichRef.current) && shouldEnrichBid(bid)) {
         didEnrichRef.current = true;
         const enrichResponse = await fetch("/api/pncp-enrich", {
           method: "POST",
@@ -237,7 +262,9 @@ export default function BidDetailsPage() {
         description: bid.description,
         organizationName: bid.organization_name,
         modality: bid.modality,
-        pncpId: bid.pncp_id
+        pncpId: bid.pncp_id,
+        guidelines:
+          "Aplicar diretrizes da Expressao Socioambiental com prioridade para CLPI, Quilombola e Diagnostico Socioambiental."
       });
       const raw = parseGeminiText(result.raw || "");
       setAnalysisRaw(raw);
@@ -254,6 +281,24 @@ export default function BidDetailsPage() {
       setError(err.message || "Falha ao gerar analise com IA.");
     } finally {
       setIsAnalyzing(false);
+    }
+  }
+
+  async function handleForceReanalysis() {
+    if (!bid) return;
+
+    try {
+      setError("");
+      await updateBidStatus(bid.id, {
+        ia_analysis_summary: null,
+        ia_is_viable: null,
+        ia_deliverables: null,
+        status: "em_analise"
+      });
+      setAnalysisRaw("");
+      await handleAnalyze(true);
+    } catch (err) {
+      setError(err.message || "Falha ao forcar reanalise do edital.");
     }
   }
 
@@ -287,6 +332,24 @@ export default function BidDetailsPage() {
           <h1 className="font-heading text-3xl text-brand-brown">{bid.title}</h1>
           <p className="mt-2 font-body text-brand-ink/80">{bid.organization_name || "Orgao nao informado"}</p>
           <p className="mt-2 font-body text-sm text-brand-ink/70">Status atual: {bid.status}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span
+              className={[
+                "rounded-full px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide",
+                esaRealtime.isHighAdherence ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+              ].join(" ")}
+            >
+              {esaRealtime.isHighAdherence ? "ALTA ADERENCIA" : "Aderencia moderada/baixa"}
+            </span>
+            <span className="rounded-full bg-brand-cyan/10 px-3 py-1 font-body text-xs font-semibold text-brand-cyan">
+              Score ESA (tempo real): {esaRealtime.score}
+            </span>
+            {esaRealtime.matched.length > 0 && (
+              <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
+                Sinais: {esaRealtime.matched.join(", ")}
+              </span>
+            )}
+          </div>
 
           <div className="mt-5 flex flex-wrap gap-3">
             <a
@@ -298,11 +361,18 @@ export default function BidDetailsPage() {
               Visualizar Edital no Portal
             </a>
             <button
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze(false)}
               disabled={isAnalyzing}
               className="rounded-xl bg-brand-cyan px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-white disabled:opacity-60"
             >
               {isAnalyzing ? "Analisando..." : "Gerar Analise Gratuita"}
+            </button>
+            <button
+              onClick={handleForceReanalysis}
+              disabled={isAnalyzing}
+              className="rounded-xl border border-brand-cyan bg-white px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-brand-cyan disabled:opacity-60"
+            >
+              Forcar Reanalise
             </button>
             <button
               onClick={() => handleMark({ is_favorite: true, is_rejected: false, status: "favoritado" })}
@@ -347,21 +417,14 @@ export default function BidDetailsPage() {
 
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
           <h2 className="font-heading text-2xl text-brand-brown">Analise da IA</h2>
-          {!analysisRaw && <p className="mt-2 font-body text-brand-ink/80">Nenhuma analise gerada ainda.</p>}
+          {!analysisRaw && (
+            <p className="mt-2 font-body text-brand-ink/80">
+              Nenhuma analise ativa. Use "Gerar Analise Gratuita" ou "Forcar Reanalise" para recalcular com diretrizes ESA.
+            </p>
+          )}
           {analysis && (
             <div className="mt-4 space-y-4">
               <div className="flex flex-wrap items-center gap-2">
-                <span
-                  className={[
-                    "rounded-full px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide",
-                    captureSignals.alta_aderencia ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-                  ].join(" ")}
-                >
-                  {captureSignals.alta_aderencia ? "Aderencia Captura: alta" : "Aderencia Captura: baixa"}
-                </span>
-                <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
-                  Score Captura: {captureSignals.aderencia_score ?? "-"}
-                </span>
                 <span
                   className={[
                     "rounded-full px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide",
