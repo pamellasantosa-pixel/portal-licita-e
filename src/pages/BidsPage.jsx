@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { syncPncBids } from "../services/pncpService";
 import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
@@ -17,7 +16,7 @@ function formatCurrencyBRL(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
 }
 
-const NEGATIVE_HIDE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia", "aquisicao de materiais"];
+const NEGATIVE_HIDE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia"];
 
 function normalizeText(value) {
   return String(value || "")
@@ -28,7 +27,43 @@ function normalizeText(value) {
 
 function hasNegativeTerm(text) {
   const lowered = normalizeText(text);
-  return NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term)));
+  const hasAcquisition = lowered.includes("aquisicao");
+  const hasPhysicalItems = ["brinquedos", "materiais", "veiculos", "itens fisicos"].some((term) => lowered.includes(term));
+  return NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term))) || (hasAcquisition && hasPhysicalItems);
+}
+
+function extractCnpjFromText(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length >= 14) return digits.slice(0, 14);
+  return "";
+}
+
+function extractCnpjFromBid(bid) {
+  const fromColumn = extractCnpjFromText(bid?.orgao_cnpj);
+  if (fromColumn) return fromColumn;
+
+  const source = String(bid?.source_url || "");
+  const pathMatch = source.match(/\/(\d{14})\//);
+  if (pathMatch?.[1]) return pathMatch[1];
+
+  return "";
+}
+
+function hasTopPriorityTerm(text) {
+  const lowered = normalizeText(text);
+  return lowered.includes("quilombola") || lowered.includes("clpi");
+}
+
+function normalizeScoreForRanking(baseScore, text) {
+  if (hasTopPriorityTerm(text)) return 10;
+  const numeric = Number(baseScore || 0);
+  return Math.min(Math.max(numeric, 0), 9);
+}
+
+function buildPncpUrlByCnpj(bid) {
+  const cnpj = extractCnpjFromBid(bid);
+  if (!cnpj) return "https://pncp.gov.br/app/editais?pagina=1";
+  return `https://pncp.gov.br/app/editais?q=${cnpj}&pagina=1`;
 }
 
 function extractMunicipioEstado(orgaoNome = "") {
@@ -129,9 +164,10 @@ export default function BidsPage() {
         valor_estimado: row.valor_estimado,
         status: row.status || "em_analise",
         source_url: row.link_edital,
+        orgao_cnpj: extractCnpjFromText(row.link_edital),
         alta_aderencia: Boolean(row.alta_aderencia),
-        aderencia_score: row.aderencia_score || 0,
-        esa_score: row.aderencia_score || 0,
+        aderencia_score: normalizeScoreForRanking(row.aderencia_score || 0, `${row.objeto_descricao || ""}`),
+        esa_score: normalizeScoreForRanking(row.aderencia_score || 0, `${row.objeto_descricao || ""}`),
         cnae_principal: row.cnae_principal || ""
       }));
 
@@ -155,9 +191,10 @@ export default function BidsPage() {
           valor_estimado: null,
           status: "em_analise",
           source_url: row.url,
-          alta_aderencia: Number(row.esa_score || 0) >= 6,
-          aderencia_score: Number(row.esa_score || 0),
-          esa_score: Number(row.esa_score || 0),
+          orgao_cnpj: extractCnpjFromText(row.orgao_cnpj || row.url),
+          alta_aderencia: normalizeScoreForRanking(Number(row.esa_score || 0), `${row.title || ""} ${row.description || ""}`) >= 6,
+          aderencia_score: normalizeScoreForRanking(Number(row.esa_score || 0), `${row.title || ""} ${row.description || ""}`),
+          esa_score: normalizeScoreForRanking(Number(row.esa_score || 0), `${row.title || ""} ${row.description || ""}`),
           cnae_principal: "",
           municipio: "-",
           estado: "-"
@@ -342,23 +379,14 @@ export default function BidsPage() {
                         Publicado: {formatDate(bid.published_date)} | Encerramento: {formatDate(bid.closing_date)}
                       </p>
                     </div>
-                    {bid.rowType === "external" ? (
-                      <a
-                        href={bid.source_url || "#"}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
-                      >
-                        Abrir Fonte
-                      </a>
-                    ) : (
-                      <Link
-                        to={`/bids/${bid.id}`}
-                        className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
-                      >
-                        Ver Detalhes
-                      </Link>
-                    )}
+                    <a
+                      href={buildPncpUrlByCnpj(bid)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
+                    >
+                      Ver Detalhes
+                    </a>
                   </div>
                 </li>
               ))}

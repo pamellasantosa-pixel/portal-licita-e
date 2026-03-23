@@ -14,6 +14,7 @@ import {
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
+const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
 
 const ESA_PRIORITY_RULES = [
   ["clpi", "consulta livre previa e informada", "consulta previa", "consulta livre"],
@@ -28,9 +29,15 @@ const NEGATIVE_HIDE_TERMS = [
   "pavimentacao",
   "pavimentacao",
   "brinquedos",
-  "obras de engenharia",
-  "aquisicao de materiais"
+  "obras de engenharia"
 ];
+
+function isEmailLike(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (text.toLowerCase().startsWith("mailto:")) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(text);
+}
 
 function onlyDigits(value) {
   return String(value || "").replace(/\D/g, "");
@@ -155,7 +162,10 @@ function normalizePncpItem(item) {
       ? `/app/contratacoes${sourcePath.replace(/^\/compras/, "")}`
       : sourcePath;
 
-  const sourceUrl = normalizedPath.startsWith("http") ? normalizedPath : `${PNCP_BASE_URL}${normalizedPath}`;
+  const sourceUrlRaw = normalizedPath.startsWith("http") ? normalizedPath : `${PNCP_BASE_URL}${normalizedPath}`;
+  const sourceUrl = isEmailLike(sourceUrlRaw)
+    ? `${PNCP_BASE_URL}/app/editais?q=${orgaoCnpj || ""}&pagina=1`
+    : sourceUrlRaw;
   const publishedDate = item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();
   const closingDate = item.data_fim_vigencia || item.dataEncerramentoProposta || null;
   const pncpControl = item.numero_controle_pncp || item.numeroControlePNCP;
@@ -169,6 +179,7 @@ function normalizePncpItem(item) {
     source_url: sourceUrl,
     pncp_id: String(pncpControl || sequence || Math.random()),
     modality: item.modalidade_licitacao_nome || item.modalidadeNome || item.modalidade || null,
+    cnae_principal: item.cnae_principal || item.cnaePrincipal || item.codigoCnae || null,
     published_date: publishedDate,
     closing_date: closingDate,
     status: "em_analise",
@@ -187,9 +198,11 @@ function normalizePayload(payload) {
 
 function scoreBid(text, profile, ticketValue = null) {
   const lowered = normalizeText(text);
+  const hasAcquisition = lowered.includes("aquisicao");
+  const hasPhysicalItems = ["brinquedos", "materiais", "veiculos", "itens fisicos"].some((term) => lowered.includes(term));
   const hasNegativeBlocker = NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term)));
 
-  if (hasNegativeBlocker) {
+  if (hasNegativeBlocker || (hasAcquisition && hasPhysicalItems)) {
     return {
       total: 0,
       keywordHits: 0,
@@ -221,10 +234,14 @@ function scoreBid(text, profile, ticketValue = null) {
   const ticketScore = !ticketKnown ? 0 : ticketInRange ? 3 : -2;
   const priorityHits = ESA_PRIORITY_RULES.filter((group) => group.some((term) => lowered.includes(normalizeText(term)))).length;
   const priorityScore = priorityHits * 10;
+  const cnaePriorityHits = PRIORITY_CNAES.filter((code) => lowered.includes(code)).length;
+  const cnaePriorityBonus = cnaePriorityHits * 5;
+  const forceTop = lowered.includes("quilombola") || lowered.includes("clpi");
 
   // Score com pesos por aderencia ao perfil da Expressao Socioambiental.
   const total =
     priorityScore +
+    cnaePriorityBonus +
     keywordHits * 4 +
     nicheHits * 3 +
     projectHits * 2 +
@@ -236,7 +253,7 @@ function scoreBid(text, profile, ticketValue = null) {
     exclusionHits * 3;
 
   return {
-    total,
+    total: forceTop ? Math.max(total, 10) : total,
     keywordHits,
     nicheHits,
     projectHits,
@@ -247,7 +264,7 @@ function scoreBid(text, profile, ticketValue = null) {
     orgHits,
     ticketKnown,
     ticketInRange,
-    strongMatch: priorityHits > 0 || keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0,
+    strongMatch: forceTop || priorityHits > 0 || keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0,
     shouldHide: false
   };
 }
@@ -378,7 +395,7 @@ export default async function handler(req, res) {
         const bid = row.bid;
         const raw = row.raw;
         const ticketValue = extractTicketValue(raw);
-        const text = `${bid.title} ${bid.description || ""} ${bid.organization_name || ""} ${bid.modality || ""} ${bid.pncp_id || ""}`;
+        const text = `${bid.title} ${bid.description || ""} ${bid.organization_name || ""} ${bid.modality || ""} ${bid.pncp_id || ""} ${bid.cnae_principal || ""}`;
         const relevance = scoreBid(text, profile, ticketValue);
         return { bid, relevance, ticketValue };
       })

@@ -16,7 +16,8 @@ const PRIORITY_SCORING = [
   { label: "Mediacao de Conflitos", terms: ["mediacao de conflitos", "mediacao"], weight: 10 }
 ];
 
-const NEGATIVE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia", "aquisicao de materiais"];
+const NEGATIVE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia"];
+const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
 
 const SOURCE_CONFIG = {
   licitacoes_e: {
@@ -48,8 +49,10 @@ function normalizeText(value) {
 
 function scoreESA(text) {
   const lowered = normalizeText(text);
+  const hasAcquisition = lowered.includes("aquisicao");
+  const hasPhysicalItems = ["brinquedos", "materiais", "veiculos", "itens fisicos"].some((term) => lowered.includes(term));
 
-  if (NEGATIVE_TERMS.some((term) => lowered.includes(normalizeText(term)))) {
+  if (NEGATIVE_TERMS.some((term) => lowered.includes(normalizeText(term))) || (hasAcquisition && hasPhysicalItems)) {
     return {
       score: 0,
       hidden: true,
@@ -66,6 +69,12 @@ function scoreESA(text) {
       score += rule.weight;
       matched.push(rule.label);
     }
+  }
+
+  score += PRIORITY_CNAES.filter((code) => lowered.includes(code)).length * 5;
+
+  if (lowered.includes("quilombola") || lowered.includes("clpi")) {
+    score = 10;
   }
 
   return {
@@ -111,7 +120,15 @@ function extractAnchors(html, pageUrl) {
       .replace(/\s+/g, " ")
       .trim();
 
-    if (text.length > 20 && !text.toLowerCase().includes("entrar") && !text.toLowerCase().includes("login")) {
+    const lowerHref = String(href || "").toLowerCase();
+    const isEmailLink = lowerHref.startsWith("mailto:") || /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(href || ""));
+
+    if (
+      text.length > 20 &&
+      !text.toLowerCase().includes("entrar") &&
+      !text.toLowerCase().includes("login") &&
+      !isEmailLink
+    ) {
       anchors.push({ href, text });
     }
 
@@ -151,6 +168,7 @@ async function fetchPncpByKeywords(keywords) {
     description: item.description || item.descricao || item.objetoCompra || item.objeto || "",
     organization:
       item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado",
+    orgao_cnpj: String(item.orgaoEntidade?.cnpj || item.cnpj || "").replace(/\D/g, "") || null,
     published_date: item.data_publicacao_pncp || item.dataPublicacao || null,
     url: item.item_url ? `https://pncp.gov.br/app/contratacoes${String(item.item_url).replace(/^\/compras/, "")}` : "https://pncp.gov.br/app/editais"
   }));
@@ -203,6 +221,7 @@ function consolidateRows(rows, keywords) {
 
     consolidated.push({
       ...row,
+      orgao_cnpj: String(row.orgao_cnpj || "").replace(/\D/g, "") || null,
       esa_score: esa.score + keywordHits * 2,
       matched_signals: esa.matched,
       keyword_hits: keywordHits
