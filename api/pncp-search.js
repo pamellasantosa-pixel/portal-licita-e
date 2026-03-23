@@ -16,8 +16,15 @@ const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
 
 function hasAnyKeyword(text, words) {
-  const normalized = (text || "").toLowerCase();
+  const normalized = normalizeText(text);
   return words.some((word) => normalized.includes(word.toLowerCase()));
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 }
 
 function uniqTerms(values = []) {
@@ -137,31 +144,31 @@ function normalizePayload(payload) {
 }
 
 function scoreBid(text, profile, ticketValue = null) {
-  const lowered = (text || "").toLowerCase();
-  const keywordHits = profile.keywords.filter((keyword) => lowered.includes(keyword.toLowerCase())).length;
-  const nicheHits = profile.niches.filter((term) => lowered.includes(term.toLowerCase())).length;
-  const projectHits = profile.projects.filter((term) => lowered.includes(term.toLowerCase())).length;
-  const orgHits = profile.targetOrgs.filter((org) => lowered.includes(org.toLowerCase())).length;
-  const cnaeHits = profile.cnaes.filter((cnae) => lowered.includes(cnae.toLowerCase())).length;
-  const requiredHits = profile.required.filter((term) => lowered.includes(term.toLowerCase())).length;
-  const exclusionHits = profile.exclusions.filter((term) => lowered.includes(term.toLowerCase())).length;
-  const territoryHits = profile.territories.filter((term) => lowered.includes(term.toLowerCase())).length;
+  const lowered = normalizeText(text);
+  const keywordHits = profile.keywords.filter((keyword) => lowered.includes(normalizeText(keyword))).length;
+  const nicheHits = profile.niches.filter((term) => lowered.includes(normalizeText(term))).length;
+  const projectHits = profile.projects.filter((term) => lowered.includes(normalizeText(term))).length;
+  const orgHits = profile.targetOrgs.filter((org) => lowered.includes(normalizeText(org))).length;
+  const cnaeHits = profile.cnaes.filter((cnae) => lowered.includes(normalizeText(cnae))).length;
+  const requiredHits = profile.required.filter((term) => lowered.includes(normalizeText(term))).length;
+  const exclusionHits = profile.exclusions.filter((term) => lowered.includes(normalizeText(term))).length;
+  const territoryHits = profile.territories.filter((term) => lowered.includes(normalizeText(term))).length;
 
   const ticketKnown = ticketValue != null;
   const ticketInRange = ticketKnown ? ticketValue >= MIN_TICKET && ticketValue <= MAX_TICKET : true;
-  const ticketScore = !ticketKnown ? 0 : ticketInRange ? 3 : -4;
+  const ticketScore = !ticketKnown ? 0 : ticketInRange ? 3 : -2;
 
   // Score com pesos por aderencia ao perfil da Expressao Socioambiental.
   const total =
-    keywordHits * 5 +
-    nicheHits * 4 +
-    projectHits * 3 +
-    requiredHits * 6 +
-    cnaeHits * 3 +
-    territoryHits * 3 +
+    keywordHits * 4 +
+    nicheHits * 3 +
+    projectHits * 2 +
+    requiredHits * 5 +
+    cnaeHits * 2 +
+    territoryHits * 2 +
     orgHits * 2 +
     ticketScore -
-    exclusionHits * 7;
+    exclusionHits * 3;
 
   return {
     total,
@@ -175,7 +182,7 @@ function scoreBid(text, profile, ticketValue = null) {
     orgHits,
     ticketKnown,
     ticketInRange,
-    strongMatch: (keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0) && exclusionHits === 0
+    strongMatch: keywordHits > 0 || nicheHits > 0 || projectHits > 0 || cnaeHits > 0 || requiredHits > 0
   };
 }
 
@@ -311,41 +318,37 @@ export default async function handler(req, res) {
       })
       .sort((a, b) => b.relevance.total - a.relevance.total);
 
-    const filtered = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 6).map((row) => row.bid);
+    const highMatches = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 8);
+    const mediumMatches = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 3);
+    const broadMatches = scoredItems.filter((row) => row.relevance.total > 0);
 
-    console.log(`[PNCP-SEARCH] Após filtro de keywords: ${filtered.length} itens`);
+    const selectedRows = highMatches.length
+      ? highMatches
+      : mediumMatches.length
+        ? mediumMatches
+        : broadMatches.length
+          ? broadMatches
+          : scoredItems.slice(0, 40);
 
-    if (filtered.length === 0) {
-      console.log(`[PNCP-SEARCH] Nenhum edital aderente forte. Usando fallback por ranking dos ${deduped.length} itens.`);
-      const fallbackFiltered = scoredItems
-        .filter((row) => row.relevance.total > 0)
-        .map((row) => row.bid)
-        .slice(0, 50);
-      
-      if (fallbackFiltered.length === 0) {
-        return res.status(200).json({
-          inserted: 0,
-          warnings,
-          message: "Nenhum edital encontrado na PNCP"
-        });
-      }
+    const selected = selectedRows.map((row) => row.bid).slice(0, 50);
 
-      const { error } = await supabase.from("bids").upsert(fallbackFiltered, { onConflict: "pncp_id" });
-      if (error) {
-        throw new Error(error.message);
-      }
+    console.log(`[PNCP-SEARCH] Selecao final: ${selected.length} itens (high=${highMatches.length}, medium=${mediumMatches.length}, broad=${broadMatches.length})`);
 
-      console.log(`[PNCP-SEARCH] Sucesso: inseridos ${fallbackFiltered.length} editais (fallback por score)`);
-      return res.status(200).json({ inserted: fallbackFiltered.length, warnings, fallback: true });
+    if (selected.length === 0) {
+      return res.status(200).json({
+        inserted: 0,
+        warnings,
+        message: "Nenhum edital encontrado na PNCP"
+      });
     }
 
-    const { error } = await supabase.from("bids").upsert(filtered, { onConflict: "pncp_id" });
+    const { error } = await supabase.from("bids").upsert(selected, { onConflict: "pncp_id" });
     if (error) {
       throw new Error(error.message);
     }
 
-    console.log(`[PNCP-SEARCH] Sucesso: inseridos ${filtered.length} editais`);
-    return res.status(200).json({ inserted: filtered.length, warnings });
+    console.log(`[PNCP-SEARCH] Sucesso: inseridos ${selected.length} editais`);
+    return res.status(200).json({ inserted: selected.length, warnings });
   } catch (error) {
     console.error(`[PNCP-SEARCH] Erro:`, error);
     return res.status(500).json({ error: error.message || "Erro ao consultar PNCP" });
