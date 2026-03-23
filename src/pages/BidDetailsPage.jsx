@@ -12,6 +12,15 @@ function parseGeminiText(raw) {
   return sanitized;
 }
 
+function parseAnalysisJson(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 function buildPncpSearchUrl(bid) {
   // Busca resiliente: usar pncp_id (chave mais estável), sem filtrar status,
   // para não ocultar editais que saíram de recebendo_proposta.
@@ -79,6 +88,7 @@ export default function BidDetailsPage() {
   // Para visualização/iframe, só usamos URL quando for PDF.
   const editalUrl = resolvePublicNoticeUrl(bid);
   const iframeAllowed = canEmbedInIframe(editalUrl);
+  const analysis = parseAnalysisJson(analysisRaw);
 
   async function loadBid() {
     try {
@@ -244,7 +254,70 @@ export default function BidDetailsPage() {
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-6 shadow-panel">
           <h2 className="font-heading text-2xl text-brand-brown">Analise da IA</h2>
           {!analysisRaw && <p className="mt-2 font-body text-brand-ink/80">Nenhuma analise gerada ainda.</p>}
-          {analysisRaw && (
+          {analysis && (
+            <div className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={[
+                    "rounded-full px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide",
+                    analysis.is_viable ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-700"
+                  ].join(" ")}
+                >
+                  {analysis.is_viable ? "Viavel para concorrer" : "Baixa aderencia"}
+                </span>
+                <span className="rounded-full bg-brand-cyan/10 px-3 py-1 font-body text-xs font-semibold text-brand-cyan">
+                  Score: {analysis.score ?? "-"}
+                </span>
+                <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
+                  Confianca: {analysis.confidence ?? "-"}%
+                </span>
+              </div>
+
+              <div className="rounded-xl border border-brand-brown/10 bg-brand-sand/35 p-4">
+                <p className="font-body text-sm text-brand-ink/90">{analysis.justification || "Sem justificativa."}</p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-brand-brown/10 p-4">
+                  <h3 className="font-heading text-sm text-brand-brown">Palavras encontradas</h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(analysis.keywords_encontradas || []).length === 0 && (
+                      <span className="font-body text-xs text-brand-ink/70">Nenhuma palavra obrigatoria encontrada.</span>
+                    )}
+                    {(analysis.keywords_encontradas || []).map((keyword) => (
+                      <span key={keyword} className="rounded-full bg-emerald-50 px-2 py-1 font-body text-xs text-emerald-700">
+                        {keyword}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-brand-brown/10 p-4">
+                  <h3 className="font-heading text-sm text-brand-brown">Sinais de atencao</h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(analysis.sinais_de_atencao || []).length === 0 && (
+                      <span className="font-body text-xs text-brand-ink/70">Nenhum sinal de atencao detectado.</span>
+                    )}
+                    {(analysis.sinais_de_atencao || []).map((keyword) => (
+                      <span key={keyword} className="rounded-full bg-red-50 px-2 py-1 font-body text-xs text-red-700">
+                        {keyword}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-brand-brown/10 p-4">
+                <h3 className="font-heading text-sm text-brand-brown">Entregaveis sugeridos</h3>
+                <ul className="mt-2 list-disc space-y-1 pl-5 font-body text-sm text-brand-ink/90">
+                  {(analysis.deliverables || []).map((item, idx) => (
+                    <li key={`${item}-${idx}`}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+          {analysisRaw && !analysis && (
             <pre className="mt-3 overflow-x-auto rounded-xl bg-brand-sand/60 p-4 font-mono text-xs text-brand-ink">
               {analysisRaw}
             </pre>

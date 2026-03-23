@@ -83,8 +83,8 @@
   const cautions = cautionSignals.filter((token) => normalized.includes(token));
 
   const score = keywordHits.length * 4 + hits.length * 2 - cautions.length * 4;
-  const isViable = score >= 8;
-  const confidence = Math.max(10, Math.min(95, 30 + score * 10));
+  const isViable = score >= 4;
+  const confidence = Math.max(10, Math.min(95, 50 + score * 6));
 
   const deliverables = [
     "Plano de trabalho com cronograma",

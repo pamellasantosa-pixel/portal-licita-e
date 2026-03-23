@@ -132,7 +132,6 @@ as $$
       or p_search = ''
       or s.corpus like '%' || lower(p_search) || '%'
     )
-    and s.aderencia_score > 0
   order by
     s.alta_aderencia desc,
     (case when s.cnae_principal in ('7320-3/00', '7490-1/99') then 0 else 1 end) asc,
