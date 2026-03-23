@@ -1,5 +1,67 @@
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 
+function decodeRepeated(value) {
+  let current = String(value || "").trim();
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) break;
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function parsePncpControl(value) {
+  const raw = decodeRepeated(value);
+  if (!raw) return null;
+
+  const withSlashYear = raw.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
+  if (withSlashYear) {
+    return {
+      cnpj: withSlashYear[1],
+      ano: withSlashYear[4],
+      numero: withSlashYear[3]
+    };
+  }
+
+  const canonical = raw.match(/^(\d{14})-(\d{4})-(\d+)$/);
+  if (canonical) {
+    return {
+      cnpj: canonical[1],
+      ano: canonical[2],
+      numero: canonical[3]
+    };
+  }
+
+  const onlyCnpj = raw.match(/^(\d{14})$/);
+  if (onlyCnpj) {
+    return {
+      cnpj: onlyCnpj[1],
+      ano: "",
+      numero: ""
+    };
+  }
+
+  return null;
+}
+
+function buildPncpQuery(pncpId) {
+  const parsed = parsePncpControl(pncpId);
+  if (!parsed) return decodeRepeated(pncpId);
+  if (parsed.cnpj && parsed.ano && parsed.numero) return `${parsed.cnpj}-${parsed.ano}-${parsed.numero}`;
+  return parsed.cnpj || decodeRepeated(pncpId);
+}
+
+function extractCnpj(pncpId, cnpjHint = "") {
+  const parsed = parsePncpControl(pncpId);
+  if (parsed?.cnpj) return parsed.cnpj;
+  const hint = String(cnpjHint || "").trim();
+  return /^\d{14}$/.test(hint) ? hint : "";
+}
+
 function normalizePayload(payload) {
   if (Array.isArray(payload?.items)) return payload.items;
   if (Array.isArray(payload)) return payload;
@@ -9,9 +71,9 @@ function normalizePayload(payload) {
   return [];
 }
 
-function buildSearchUrl(pncpId) {
+function buildSearchUrl(queryTerm) {
   const query = new URLSearchParams({
-    q: pncpId,
+    q: queryTerm,
     pagina: "1"
   });
   return `https://pncp.gov.br/app/editais?${query.toString()}`;
@@ -47,9 +109,12 @@ async function findItemByPncpId(pncpId) {
 }
 
 export default async function handler(req, res) {
-  const pncpId = String(req.query?.pncp_id || req.query?.pncpId || "").trim();
+  const pncpId = decodeRepeated(req.query?.pncp_id || req.query?.pncpId || "");
+  const cnpj = extractCnpj(pncpId, req.query?.cnpj);
+  const normalizedQuery = buildPncpQuery(pncpId);
+  const fallbackQuery = cnpj || normalizedQuery;
 
-  if (!pncpId) {
+  if (!fallbackQuery) {
     res.writeHead(302, { Location: "https://pncp.gov.br/app/editais?pagina=1" });
     return res.end();
   }
@@ -57,11 +122,11 @@ export default async function handler(req, res) {
   try {
     const item = await findItemByPncpId(pncpId);
     const directUrl = buildContratacoesUrl(item?.item_url);
-    const location = directUrl || buildSearchUrl(pncpId);
+    const location = directUrl || buildSearchUrl(fallbackQuery);
     res.writeHead(302, { Location: location });
     return res.end();
   } catch {
-    res.writeHead(302, { Location: buildSearchUrl(pncpId) });
+    res.writeHead(302, { Location: buildSearchUrl(fallbackQuery) });
     return res.end();
   }
 }

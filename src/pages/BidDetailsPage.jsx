@@ -21,10 +21,81 @@ function parseAnalysisJson(raw) {
   }
 }
 
+function decodeRepeated(value) {
+  let current = String(value || "").trim();
+  for (let i = 0; i < 3; i += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) break;
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function parsePncpControl(value) {
+  const raw = decodeRepeated(value);
+  if (!raw) return null;
+
+  const withSlashYear = raw.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
+  if (withSlashYear) {
+    return {
+      cnpj: withSlashYear[1],
+      ano: withSlashYear[4],
+      numero: withSlashYear[3]
+    };
+  }
+
+  const canonical = raw.match(/^(\d{14})-(\d{4})-(\d+)$/);
+  if (canonical) {
+    return {
+      cnpj: canonical[1],
+      ano: canonical[2],
+      numero: canonical[3]
+    };
+  }
+
+  const onlyCnpj = raw.match(/^(\d{14})$/);
+  if (onlyCnpj) {
+    return {
+      cnpj: onlyCnpj[1],
+      ano: "",
+      numero: ""
+    };
+  }
+
+  return null;
+}
+
+function extractCnpjFromBid(bid) {
+  const parsed = parsePncpControl(bid?.pncp_id);
+  if (parsed?.cnpj) return parsed.cnpj;
+  const source = decodeRepeated(bid?.source_url || "");
+  const cnpjInPath = source.match(/\/(\d{14})\//);
+  return cnpjInPath?.[1] || "";
+}
+
+function buildPncpQuery(bid) {
+  const parsed = parsePncpControl(bid?.pncp_id);
+  if (parsed?.cnpj && parsed?.ano && parsed?.numero) {
+    // Formato esperado: CNPJ-ANO-NUMERO.
+    return `${parsed.cnpj}-${parsed.ano}-${parsed.numero}`;
+  }
+  if (parsed?.cnpj) return parsed.cnpj;
+  return decodeRepeated(bid?.pncp_id || bid?.title || "").trim();
+}
+
+function toHttpsUrl(url) {
+  if (!url) return "";
+  if (url.startsWith("https://")) return url;
+  if (url.startsWith("http://")) return `https://${url.slice("http://".length)}`;
+  return url;
+}
+
 function buildPncpSearchUrl(bid) {
-  // Busca resiliente: usar pncp_id (chave mais estável), sem filtrar status,
-  // para não ocultar editais que saíram de recebendo_proposta.
-  const query = (bid?.pncp_id || bid?.title || "").toString().trim();
+  const query = buildPncpQuery(bid);
   const params = new URLSearchParams({
     q: query,
     pagina: "1"
@@ -32,11 +103,26 @@ function buildPncpSearchUrl(bid) {
   return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
 }
 
+function buildPncpCnpjFallbackUrl(bid) {
+  const cnpj = extractCnpjFromBid(bid);
+  if (!cnpj) return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
+  const params = new URLSearchParams({
+    q: cnpj,
+    pagina: "1"
+  });
+  return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
+}
+
 function buildPortalUrl(bid) {
+  const cnpj = extractCnpjFromBid(bid);
   if (bid?.pncp_id) {
-    return `/api/pncp-open?pncp_id=${encodeURIComponent(bid.pncp_id)}`;
+    const params = new URLSearchParams({
+      pncp_id: decodeRepeated(bid.pncp_id),
+      cnpj
+    });
+    return `/api/pncp-open?${params.toString()}`;
   }
-  return buildPncpSearchUrl(bid);
+  return buildPncpCnpjFallbackUrl(bid);
 }
 
 function shouldEnrichBid(bid) {
@@ -50,7 +136,7 @@ function shouldEnrichBid(bid) {
 
 function resolvePublicNoticeUrl(bid) {
   const searchUrl = buildPncpSearchUrl(bid);
-  const sourceUrl = bid?.source_url || "";
+  const sourceUrl = toHttpsUrl(decodeRepeated(bid?.source_url || ""));
 
   if (!sourceUrl) {
     return searchUrl;
@@ -65,12 +151,12 @@ function resolvePublicNoticeUrl(bid) {
     return searchUrl;
   }
 
-  return sourceUrl.startsWith("http") ? sourceUrl : searchUrl;
+  return sourceUrl.startsWith("https://") ? sourceUrl : searchUrl;
 }
 
 function canEmbedInIframe(url) {
   if (!url) return false;
-  return /\.pdf($|\?)/i.test(url);
+  return url.startsWith("https://") && /\.pdf($|\?)/i.test(url);
 }
 
 export default function BidDetailsPage() {
@@ -87,6 +173,7 @@ export default function BidDetailsPage() {
 
   // Para visualização/iframe, só usamos URL quando for PDF.
   const editalUrl = resolvePublicNoticeUrl(bid);
+  const cnpjFallbackUrl = buildPncpCnpjFallbackUrl(bid);
   const iframeAllowed = canEmbedInIframe(editalUrl);
   const analysis = parseAnalysisJson(analysisRaw);
 
@@ -241,6 +328,12 @@ export default function BidDetailsPage() {
               {" "}
               <a href={editalUrl} target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
                 {editalUrl}
+              </a>
+              {" "}
+              | se nao encontrar, busque pelo CNPJ do orgao:
+              {" "}
+              <a href={cnpjFallbackUrl} target="_blank" rel="noreferrer" className="text-brand-cyan underline underline-offset-4">
+                {cnpjFallbackUrl}
               </a>
             </p>
           )}
