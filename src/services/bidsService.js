@@ -11,7 +11,7 @@ export async function getTodayBids() {
 
   const { data, error } = await supabase
     .from("bids")
-    .select("id,title,published_date,status,is_favorite,organization_name")
+    .select("id,title,published_date,status,is_favorite,organization_name,orgao_cnpj")
     .gte("published_date", todayStart.toISOString())
     .lt("published_date", todayEnd.toISOString())
     .order("published_date", { ascending: false });

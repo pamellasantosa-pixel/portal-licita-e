@@ -197,6 +197,7 @@ export default function DashboardPage() {
                 <li key={bid.id} className="rounded-xl border border-brand-brown/10 p-4 transition hover:bg-brand-sand/40">
                   <h3 className="font-heading text-lg text-brand-brown">{bid.title}</h3>
                   <p className="mt-1 font-body text-sm text-brand-ink/80">{bid.organization_name || "Orgao nao informado"}</p>
+                  {bid.orgao_cnpj && <p className="mt-1 font-body text-xs text-brand-ink/65">CNPJ: {bid.orgao_cnpj}</p>}
                   <p className="mt-1 font-body text-xs text-brand-ink/60">Publicado em: {dateToBrazilian(bid.published_date)}</p>
                   <Link to={`/bids/${bid.id}`} className="mt-2 inline-block font-body text-xs text-brand-cyan underline underline-offset-4">
                     Abrir detalhes do edital

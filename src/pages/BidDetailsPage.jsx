@@ -80,24 +80,17 @@ function extractCnpjFromBid(bid) {
 }
 
 function generatePNCPUrl(bid) {
-  const parsed = parsePncpControl(bid?.pncp_id);
   const cnpj = extractCnpjFromBid(bid);
-
-  if (cnpj && parsed?.ano && parsed?.numero) {
-    // Formato esperado: CNPJ-ANO-NUMERO.
-    const params = new URLSearchParams({
-      q: `${cnpj}-${parsed.ano}-${parsed.numero}`,
-      pagina: "1"
-    });
-    return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
+  if (cnpj) {
+    return `${PNCP_EDITAIS_BASE_URL}?q=${cnpj}`;
   }
 
-  const fallbackQuery = cnpj || decodeRepeated(bid?.pncp_id || bid?.title || "").trim();
-  const params = new URLSearchParams({
-    q: fallbackQuery,
-    pagina: "1"
-  });
-  return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
+  const parsed = parsePncpControl(bid?.pncp_id);
+  if (parsed?.cnpj) {
+    return `${PNCP_EDITAIS_BASE_URL}?q=${parsed.cnpj}`;
+  }
+
+  return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
 }
 
 function toHttpsUrl(url) {
@@ -122,15 +115,7 @@ function buildPncpCnpjFallbackUrl(bid) {
 }
 
 function buildPortalUrl(bid) {
-  const cnpj = extractCnpjFromBid(bid);
-  if (bid?.pncp_id) {
-    const params = new URLSearchParams({
-      pncp_id: decodeRepeated(bid.pncp_id),
-      cnpj
-    });
-    return `/api/pncp-open?${params.toString()}`;
-  }
-  return buildPncpCnpjFallbackUrl(bid);
+  return generatePNCPUrl(bid);
 }
 
 function shouldEnrichBid(bid) {
@@ -176,7 +161,7 @@ export default function BidDetailsPage() {
   const [analysisRaw, setAnalysisRaw] = useState("");
   const didEnrichRef = useRef(false);
 
-  // Para o botão principal, sempre abre a busca oficial por `pncp_id` (mais resiliente).
+  // Botao principal abre busca pre-preenchida por orgao_cnpj.
   const portalUrl = buildPortalUrl(bid);
 
   // Para visualização/iframe, só usamos URL quando for PDF.
