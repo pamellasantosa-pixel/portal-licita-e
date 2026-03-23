@@ -65,10 +65,23 @@ export default function BidsPage() {
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState([]);
 
+  function normalizeExternalWarnings(rawWarnings = []) {
+    const normalized = [];
+    for (const item of rawWarnings) {
+      const text = String(item || "").toLowerCase();
+      if (text.includes("licitacoes-e")) normalized.push("Fonte Licitacoes-e (BB) temporariamente indisponivel");
+      else if (text.includes("compras.gov")) normalized.push("Fonte Compras.gov.br temporariamente indisponivel");
+      else if (text.includes("portal de compras publicas")) normalized.push("Fonte Portal de Compras Publicas temporariamente indisponivel");
+      else if (text.includes("pncp")) normalized.push("Fonte PNCP temporariamente indisponivel");
+    }
+    return Array.from(new Set(normalized));
+  }
+
   async function loadBids() {
     try {
       setIsLoading(true);
       setError("");
+      setWarnings([]);
       const supabase = getSupabaseClientOrThrow();
 
       let fromDate = null;
@@ -84,19 +97,30 @@ export default function BidsPage() {
         .join(" ")
         .trim();
 
-      const { data, error: rpcError } = await supabase.rpc("get_filtered_bids", {
-        p_search: rpcSearch || null,
-        p_from_date: fromDate,
-        p_to_date: null,
-        p_status: status,
-        p_limit: 200
-      });
+      const [rpcResult, externalResult] = await Promise.all([
+        supabase.rpc("get_filtered_bids", {
+          p_search: rpcSearch || null,
+          p_from_date: fromDate,
+          p_to_date: null,
+          p_status: status,
+          p_limit: 200
+        }),
+        fetch("/api/multi-source-search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        })
+      ]);
+
+      const { data, error: rpcError } = rpcResult;
 
       if (rpcError) throw new Error(rpcError.message);
 
-      const normalized = (data || []).map((row) => ({
+      const normalizedInternal = (data || []).map((row) => ({
         ...extractMunicipioEstado(row.orgao_nome),
         id: row.id,
+        rowType: "internal",
+        source: "PNCP",
         title: row.objeto_descricao || "Sem titulo",
         description: row.objeto_descricao || "",
         organization_name: row.orgao_nome || "Orgao nao informado",
@@ -107,10 +131,51 @@ export default function BidsPage() {
         source_url: row.link_edital,
         alta_aderencia: Boolean(row.alta_aderencia),
         aderencia_score: row.aderencia_score || 0,
+        esa_score: row.aderencia_score || 0,
         cnae_principal: row.cnae_principal || ""
       }));
 
-      const hiddenFiltered = normalized.filter((row) => !hasNegativeTerm(`${row.title} ${row.description || ""}`));
+      let normalizedExternal = [];
+      if (externalResult.ok) {
+        const payload = await externalResult.json().catch(() => ({}));
+        const sourceWarnings = normalizeExternalWarnings(payload.warnings || []);
+        if (sourceWarnings.length > 0) {
+          setWarnings(sourceWarnings);
+        }
+
+        normalizedExternal = (payload.data || []).map((row, index) => ({
+          id: row.url || `external-${index}`,
+          rowType: "external",
+          source: row.source || "Externa",
+          title: row.title || "Sem titulo",
+          description: row.description || "",
+          organization_name: row.organization || "Orgao nao informado",
+          published_date: row.published_date,
+          closing_date: null,
+          valor_estimado: null,
+          status: "em_analise",
+          source_url: row.url,
+          alta_aderencia: Number(row.esa_score || 0) >= 6,
+          aderencia_score: Number(row.esa_score || 0),
+          esa_score: Number(row.esa_score || 0),
+          cnae_principal: "",
+          municipio: "-",
+          estado: "-"
+        }));
+      } else {
+        setWarnings(["Fontes externas temporariamente indisponiveis"]);
+      }
+
+      const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter(
+        (row) => !hasNegativeTerm(`${row.title} ${row.description || ""}`)
+      );
+
+      hiddenFiltered.sort((a, b) => {
+        const scoreDiff = (b.esa_score || 0) - (a.esa_score || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return new Date(b.published_date || 0) - new Date(a.published_date || 0);
+      });
+
       setBids(hiddenFiltered);
     } catch (err) {
       setError(err.message || "Falha ao carregar editais.");
@@ -138,9 +203,8 @@ export default function BidsPage() {
       setError("");
       const customKeywords = await getActiveKeywords().catch(() => []);
       const result = await syncPncBids(customKeywords);
-      if (result.warnings?.length) {
-        setWarnings(result.warnings);
-      }
+      const syncWarnings = (result.warnings || []).map(() => "Fonte PNCP temporariamente indisponivel");
+      if (syncWarnings.length) setWarnings((prev) => Array.from(new Set([...prev, ...syncWarnings])));
       await loadBids();
     } catch (err) {
       setError(err.message || "Falha ao sincronizar editais.");
@@ -225,7 +289,7 @@ export default function BidsPage() {
           {error && <p className="mb-3 font-body text-sm text-red-700">{error}</p>}
           {warnings.length > 0 && (
             <p className="mb-3 font-body text-sm text-amber-700">
-              Sincronizacao parcial: {warnings.length} termos ficaram indisponiveis no PNCP.
+              {warnings.join(" | ")}
             </p>
           )}
 
@@ -268,6 +332,9 @@ export default function BidsPage() {
                             CNAE {bid.cnae_principal}
                           </span>
                         )}
+                        <span className="rounded-full border border-brand-brown/20 bg-white px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
+                          Fonte: {bid.source || "PNCP"}
+                        </span>
                       </div>
                       <h3 className="font-heading text-lg text-brand-brown">{bid.title}</h3>
                       <p className="font-body text-sm text-brand-ink/80">{bid.organization_name || "Orgao nao informado"}</p>
@@ -275,12 +342,23 @@ export default function BidsPage() {
                         Publicado: {formatDate(bid.published_date)} | Encerramento: {formatDate(bid.closing_date)}
                       </p>
                     </div>
-                    <Link
-                      to={`/bids/${bid.id}`}
-                      className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
-                    >
-                      Ver Detalhes
-                    </Link>
+                    {bid.rowType === "external" ? (
+                      <a
+                        href={bid.source_url || "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
+                      >
+                        Abrir Fonte
+                      </a>
+                    ) : (
+                      <Link
+                        to={`/bids/${bid.id}`}
+                        className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
+                      >
+                        Ver Detalhes
+                      </Link>
+                    )}
                   </div>
                 </li>
               ))}
