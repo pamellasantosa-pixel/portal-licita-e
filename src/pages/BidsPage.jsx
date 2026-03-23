@@ -10,6 +10,33 @@ function formatDate(value) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
 }
 
+function formatCurrencyBRL(value) {
+  if (value == null || value === "") return "Valor nao informado";
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return "Valor nao informado";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
+}
+
+function extractMunicipioEstado(orgaoNome = "") {
+  const text = String(orgaoNome || "").trim();
+  if (!text) return { municipio: "Municipio nao informado", estado: "UF nao informada" };
+
+  const slashUfMatch = text.match(/\/?([A-Z]{2})$/);
+  const dashUfMatch = text.match(/-\s*([A-Z]{2})$/);
+  const estado = (slashUfMatch?.[1] || dashUfMatch?.[1] || "UF nao informada").toUpperCase();
+
+  let municipio = text;
+  municipio = municipio.replace(/^MUNICIPIO DE\s+/i, "");
+  municipio = municipio.replace(/^PREFEITURA MUNICIPAL DE\s+/i, "");
+  municipio = municipio.replace(/\s*[-/]\s*[A-Z]{2}$/i, "");
+  municipio = municipio.trim();
+
+  return {
+    municipio: municipio || "Municipio nao informado",
+    estado
+  };
+}
+
 export default function BidsPage() {
   const [bids, setBids] = useState([]);
   const [search, setSearch] = useState("");
@@ -54,12 +81,14 @@ export default function BidsPage() {
       if (rpcError) throw new Error(rpcError.message);
 
       const normalized = (data || []).map((row) => ({
+        ...extractMunicipioEstado(row.orgao_nome),
         id: row.id,
         title: row.objeto_descricao || "Sem titulo",
         description: row.objeto_descricao || "",
         organization_name: row.orgao_nome || "Orgao nao informado",
         published_date: row.data_abertura,
         closing_date: null,
+        valor_estimado: row.valor_estimado,
         status: row.status || "em_analise",
         source_url: row.link_edital,
         alta_aderencia: Boolean(row.alta_aderencia),
@@ -209,6 +238,15 @@ export default function BidsPage() {
                         )}
                         <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-brand-cyan">
                           Score {bid.aderencia_score}
+                        </span>
+                        <span className="rounded-full border border-brand-brown/20 bg-white px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
+                          Municipio: {bid.municipio}
+                        </span>
+                        <span className="rounded-full border border-brand-brown/20 bg-white px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
+                          Estado: {bid.estado}
+                        </span>
+                        <span className="rounded-full border border-brand-brown/20 bg-brand-sand px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
+                          {formatCurrencyBRL(bid.valor_estimado)}
                         </span>
                         {bid.cnae_principal && (
                           <span className="rounded-full border border-brand-brown/20 bg-brand-sand px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
