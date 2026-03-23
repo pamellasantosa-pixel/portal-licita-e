@@ -26,17 +26,33 @@ export async function getTodayBids() {
 export async function getAllBids() {
   const supabase = getSupabaseClientOrThrow();
 
-  const { data, error } = await supabase
-    .from("bids")
-    .select("id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,source_url,pncp_id,modality")
-    .order("published_date", { ascending: false })
-    .limit(150);
+  // Primeiro tenta ler schema estendido (aderencia/valor). Se o banco ainda nao foi migrado,
+  // cai automaticamente para o schema basico sem quebrar a aplicacao.
+  const extendedSelect =
+    "id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,orgao_nome,source_url,pncp_id,modality,aderencia_score,alta_aderencia,valor_estimado";
 
-  if (error) {
-    throw new Error(`Erro ao carregar lista de bids: ${error.message}`);
+  const basicSelect =
+    "id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,source_url,pncp_id,modality";
+
+  const extended = await supabase.from("bids").select(extendedSelect).order("published_date", { ascending: false }).limit(150);
+
+  if (!extended.error) {
+    return extended.data ?? [];
   }
 
-  return data ?? [];
+  const basic = await supabase.from("bids").select(basicSelect).order("published_date", { ascending: false }).limit(150);
+
+  if (basic.error) {
+    throw new Error(`Erro ao carregar lista de bids: ${basic.error.message}`);
+  }
+
+  return (basic.data || []).map((item) => ({
+    ...item,
+    orgao_nome: item.organization_name,
+    aderencia_score: null,
+    alta_aderencia: null,
+    valor_estimado: null
+  }));
 }
 
 export async function getBidById(id) {

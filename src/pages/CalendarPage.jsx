@@ -9,6 +9,40 @@ function formatDate(value) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
 }
 
+function formatCurrencyBRL(value) {
+  if (value == null || value === "") return "Valor nao informado";
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return "Valor nao informado";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
+}
+
+function extractMunicipioEstado(orgaoNome = "") {
+  const text = String(orgaoNome || "").trim();
+  if (!text) return { municipio: "Municipio nao informado", estado: "UF nao informada" };
+
+  const slashUfMatch = text.match(/\/?([A-Z]{2})$/);
+  const dashUfMatch = text.match(/-\s*([A-Z]{2})$/);
+  const estado = (slashUfMatch?.[1] || dashUfMatch?.[1] || "UF nao informada").toUpperCase();
+
+  let municipio = text;
+  municipio = municipio.replace(/^MUNICIPIO DE\s+/i, "");
+  municipio = municipio.replace(/^PREFEITURA MUNICIPAL DE\s+/i, "");
+  municipio = municipio.replace(/\s*[-/]\s*[A-Z]{2}$/i, "");
+  municipio = municipio.trim();
+
+  return {
+    municipio: municipio || "Municipio nao informado",
+    estado
+  };
+}
+
+function classifyAderencia(score, altaAderencia) {
+  if (altaAderencia) return "Alta";
+  if (typeof score === "number" && score >= 8) return "Alta";
+  if (typeof score === "number" && score >= 3) return "Media";
+  return "Baixa";
+}
+
 export default function CalendarPage() {
   const navigate = useNavigate();
   const [bids, setBids] = useState([]);
@@ -30,7 +64,12 @@ export default function CalendarPage() {
         type: "Prazo do edital",
         date: item.closing_date,
         title: item.title,
-        bidId: item.id
+        bidId: item.id,
+        aderencia: classifyAderencia(item.aderencia_score, item.alta_aderencia),
+        score: item.aderencia_score,
+        municipio: extractMunicipioEstado(item.orgao_nome || item.organization_name).municipio,
+        estado: extractMunicipioEstado(item.orgao_nome || item.organization_name).estado,
+        valor: formatCurrencyBRL(item.valor_estimado)
       }));
 
     const customEvents = manualAlerts.map((item, idx) => ({
@@ -134,7 +173,24 @@ export default function CalendarPage() {
                   <tr key={eventItem.id || eventItem.bidId || index} className="border-t border-brand-brown/10">
                     <td className="px-4 py-3 font-body text-sm text-brand-brown">{formatDate(eventItem.date)}</td>
                     <td className="px-4 py-3 font-body text-sm text-brand-ink/80">{eventItem.type}</td>
-                    <td className="px-4 py-3 font-body text-sm text-brand-ink/80">{eventItem.title}</td>
+                    <td className="px-4 py-3 font-body text-sm text-brand-ink/80">
+                      <p>{eventItem.title}</p>
+                      {!eventItem.isManual && (
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Aderencia: {eventItem.aderencia}</span>
+                          <span className="rounded-full bg-brand-cyan/10 px-2 py-1 text-brand-cyan">
+                            Score: {eventItem.score ?? "-"}
+                          </span>
+                          <span className="rounded-full bg-brand-sand px-2 py-1 text-brand-brown">
+                            Municipio: {eventItem.municipio || "Municipio nao informado"}
+                          </span>
+                          <span className="rounded-full bg-brand-sand px-2 py-1 text-brand-brown">
+                            Estado: {eventItem.estado || "UF nao informada"}
+                          </span>
+                          <span className="rounded-full bg-brand-sand px-2 py-1 text-brand-brown">Valor: {eventItem.valor}</span>
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right">
                       {eventItem.bidId && (
                         <button
