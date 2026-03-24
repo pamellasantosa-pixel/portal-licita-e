@@ -87,6 +87,12 @@ function generatePNCPUrl(bid) {
   return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
 }
 
+function isComprasGovFederalBid(bid) {
+  const source = String(bid?.source || "").toLowerCase();
+  const url = String(bid?.source_url || "").toLowerCase();
+  return source.includes("compras.gov") || url.includes("compras.gov.br") || url.includes("gov.br/compras");
+}
+
 function toHttpsUrl(url) {
   if (!url) return "";
   if (url.startsWith("https://")) return url;
@@ -109,6 +115,9 @@ function buildPncpCnpjFallbackUrl(bid) {
 }
 
 function buildPortalUrl(bid) {
+  if (isComprasGovFederalBid(bid) && /^https?:\/\//i.test(String(bid?.source_url || "").trim())) {
+    return String(bid.source_url).trim();
+  }
   return generatePNCPUrl(bid);
 }
 
@@ -148,7 +157,7 @@ function canEmbedInIframe(url) {
 
 function calculateRealtimeEsaScore(bid) {
   const text = `${bid?.title || ""} ${bid?.description || ""} ${bid?.organization_name || ""} ${bid?.modality || ""} ${bid?.pncp_id || ""}`;
-  const esa = evaluateEsaScore(text);
+  const esa = evaluateEsaScore(text, { organizationName: bid?.organization_name || "" });
   return {
     score: esa.score,
     matched: esa.matchedTopTerms || [],

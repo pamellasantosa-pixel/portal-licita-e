@@ -14,6 +14,8 @@ const ESA_EXCLUSION_TERMS = [
   "generos alimenticios"
 ];
 
+const FEDERAL_PRIORITY_ORGS = ["incra", "funai", "ibama", "icmbio", "mma"];
+
 function normalizeText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -21,8 +23,20 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
-export function evaluateEsaScore(text) {
+export function isPriorityFederalOrg(orgName) {
+  const normalized = normalizeText(orgName);
+  return FEDERAL_PRIORITY_ORGS.some((org) => normalized.includes(org));
+}
+
+function hasAutoTopFederalSignal(normalizedText, normalizedOrgName) {
+  const isIncraOrFunai = normalizedOrgName.includes("incra") || normalizedOrgName.includes("funai");
+  if (!isIncraOrFunai) return false;
+  return normalizedText.includes("quilombola") || normalizedText.includes("indigena");
+}
+
+export function evaluateEsaScore(text, context = {}) {
   const lowered = normalizeText(text);
+  const orgName = normalizeText(context.organizationName || context.organization || "");
 
   const matchedExclusions = ESA_EXCLUSION_TERMS.filter((term) => lowered.includes(term));
   if (matchedExclusions.length > 0) {
@@ -32,6 +46,16 @@ export function evaluateEsaScore(text) {
       highAdherence: false,
       matchedTopTerms: [],
       matchedExclusions
+    };
+  }
+
+  if (hasAutoTopFederalSignal(lowered, orgName)) {
+    return {
+      score: 10,
+      hidden: false,
+      highAdherence: true,
+      matchedTopTerms: ["federal_incra_funai", "quilombola_ou_indigena"],
+      matchedExclusions: []
     };
   }
 
