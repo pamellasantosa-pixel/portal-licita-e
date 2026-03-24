@@ -25,12 +25,7 @@ const ESA_PRIORITY_RULES = [
   ["mediacao de conflitos", "mediacao de conflitos territoriais", "mediacao"]
 ];
 
-const NEGATIVE_HIDE_TERMS = [
-  "pavimentacao",
-  "pavimentacao",
-  "brinquedos",
-  "obras de engenharia"
-];
+const NEGATIVE_HIDE_TERMS = ["aquisicao de materiais", "obras de pavimentacao", "brinquedos", "generos alimenticios"];
 
 function isEmailLike(value = "") {
   const text = String(value || "").trim();
@@ -198,11 +193,9 @@ function normalizePayload(payload) {
 
 function scoreBid(text, profile, ticketValue = null) {
   const lowered = normalizeText(text);
-  const hasAcquisition = lowered.includes("aquisicao");
-  const hasPhysicalItems = ["brinquedos", "materiais", "veiculos", "itens fisicos"].some((term) => lowered.includes(term));
   const hasNegativeBlocker = NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term)));
 
-  if (hasNegativeBlocker || (hasAcquisition && hasPhysicalItems)) {
+  if (hasNegativeBlocker) {
     return {
       total: 0,
       keywordHits: 0,
@@ -236,7 +229,13 @@ function scoreBid(text, profile, ticketValue = null) {
   const priorityScore = priorityHits * 10;
   const cnaePriorityHits = PRIORITY_CNAES.filter((code) => lowered.includes(code)).length;
   const cnaePriorityBonus = cnaePriorityHits * 5;
-  const forceTop = lowered.includes("quilombola") || lowered.includes("clpi");
+  const forceTop =
+    lowered.includes("clpi") ||
+    lowered.includes("consulta previa") ||
+    lowered.includes("quilombola") ||
+    lowered.includes("indigena") ||
+    lowered.includes("diagnostico socioambiental") ||
+    lowered.includes("convencao 169");
 
   // Score com pesos por aderencia ao perfil da Expressao Socioambiental.
   const total =
@@ -252,8 +251,10 @@ function scoreBid(text, profile, ticketValue = null) {
     ticketScore -
     exclusionHits * 3;
 
+  const cappedTotal = forceTop ? 10 : Math.min(9, total);
+
   return {
-    total: forceTop ? Math.max(total, 10) : total,
+    total: cappedTotal,
     keywordHits,
     nicheHits,
     projectHits,

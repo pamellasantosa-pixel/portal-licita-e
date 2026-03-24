@@ -3,6 +3,7 @@ import { syncPncBids } from "../services/pncpService";
 import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
+import { evaluateEsaScore, isEmailLike, sanitizeCnpj } from "../lib/esaScoring";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -16,54 +17,15 @@ function formatCurrencyBRL(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
 }
 
-const NEGATIVE_HIDE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia"];
-
-function normalizeText(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function hasNegativeTerm(text) {
-  const lowered = normalizeText(text);
-  const hasAcquisition = lowered.includes("aquisicao");
-  const hasPhysicalItems = ["brinquedos", "materiais", "veiculos", "itens fisicos"].some((term) => lowered.includes(term));
-  return NEGATIVE_HIDE_TERMS.some((term) => lowered.includes(normalizeText(term))) || (hasAcquisition && hasPhysicalItems);
-}
-
-function extractCnpjFromText(value) {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (digits.length >= 14) return digits.slice(0, 14);
-  return "";
-}
-
-function extractCnpjFromBid(bid) {
-  const fromColumn = extractCnpjFromText(bid?.orgao_cnpj);
-  if (fromColumn) return fromColumn;
-
-  const source = String(bid?.source_url || "");
-  const pathMatch = source.match(/\/(\d{14})\//);
-  if (pathMatch?.[1]) return pathMatch[1];
-
-  return "";
-}
-
-function hasTopPriorityTerm(text) {
-  const lowered = normalizeText(text);
-  return lowered.includes("quilombola") || lowered.includes("clpi");
-}
-
-function normalizeScoreForRanking(baseScore, text) {
-  if (hasTopPriorityTerm(text)) return 10;
-  const numeric = Number(baseScore || 0);
-  return Math.min(Math.max(numeric, 0), 9);
+function normalizeScoreForRanking(text) {
+  return evaluateEsaScore(text).score;
 }
 
 function buildPncpUrlByCnpj(bid) {
-  const cnpj = extractCnpjFromBid(bid);
+  const cnpj = sanitizeCnpj(bid?.orgao_cnpj);
+  if (isEmailLike(bid?.orgao_cnpj)) return "https://pncp.gov.br/app/editais";
   if (!cnpj) return "https://pncp.gov.br/app/editais?pagina=1";
-  return `https://pncp.gov.br/app/editais?q=${cnpj}&pagina=1`;
+  return `https://pncp.gov.br/app/editais?q=${cnpj}`;
 }
 
 function extractMunicipioEstado(orgaoNome = "") {
@@ -151,6 +113,20 @@ export default function BidsPage() {
 
       if (rpcError) throw new Error(rpcError.message);
 
+      const ids = (data || []).map((row) => row.id).filter(Boolean);
+      let cnpjById = {};
+      if (ids.length > 0) {
+        const { data: cnpjRows } = await supabase
+          .from("bids")
+          .select("id,orgao_cnpj")
+          .in("id", ids);
+
+        cnpjById = (cnpjRows || []).reduce((acc, row) => {
+          acc[row.id] = sanitizeCnpj(row.orgao_cnpj);
+          return acc;
+        }, {});
+      }
+
       const normalizedInternal = (data || []).map((row) => ({
         ...extractMunicipioEstado(row.orgao_nome),
         id: row.id,
@@ -164,10 +140,10 @@ export default function BidsPage() {
         valor_estimado: row.valor_estimado,
         status: row.status || "em_analise",
         source_url: row.link_edital,
-        orgao_cnpj: extractCnpjFromText(row.link_edital),
-        alta_aderencia: Boolean(row.alta_aderencia),
-        aderencia_score: normalizeScoreForRanking(row.aderencia_score || 0, `${row.objeto_descricao || ""}`),
-        esa_score: normalizeScoreForRanking(row.aderencia_score || 0, `${row.objeto_descricao || ""}`),
+        orgao_cnpj: cnpjById[row.id] || "",
+        alta_aderencia: evaluateEsaScore(`${row.objeto_descricao || ""}`).highAdherence,
+        aderencia_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`),
+        esa_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`),
         cnae_principal: row.cnae_principal || ""
       }));
 
@@ -191,10 +167,10 @@ export default function BidsPage() {
           valor_estimado: null,
           status: "em_analise",
           source_url: row.url,
-          orgao_cnpj: extractCnpjFromText(row.orgao_cnpj || row.url),
-          alta_aderencia: normalizeScoreForRanking(Number(row.esa_score || 0), `${row.title || ""} ${row.description || ""}`) >= 6,
-          aderencia_score: normalizeScoreForRanking(Number(row.esa_score || 0), `${row.title || ""} ${row.description || ""}`),
-          esa_score: normalizeScoreForRanking(Number(row.esa_score || 0), `${row.title || ""} ${row.description || ""}`),
+          orgao_cnpj: sanitizeCnpj(row.orgao_cnpj),
+          alta_aderencia: evaluateEsaScore(`${row.title || ""} ${row.description || ""}`).highAdherence,
+          aderencia_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`),
+          esa_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`),
           cnae_principal: "",
           municipio: "-",
           estado: "-"
@@ -203,9 +179,10 @@ export default function BidsPage() {
         setWarnings(["Fontes externas temporariamente indisponiveis"]);
       }
 
-      const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter(
-        (row) => !hasNegativeTerm(`${row.title} ${row.description || ""}`)
-      );
+      const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter((row) => {
+        const rule = evaluateEsaScore(`${row.title} ${row.description || ""}`);
+        return !rule.hidden;
+      });
 
       hiddenFiltered.sort((a, b) => {
         const scoreDiff = (b.esa_score || 0) - (a.esa_score || 0);

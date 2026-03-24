@@ -16,7 +16,7 @@ const PRIORITY_SCORING = [
   { label: "Mediacao de Conflitos", terms: ["mediacao de conflitos", "mediacao"], weight: 10 }
 ];
 
-const NEGATIVE_TERMS = ["pavimentacao", "brinquedos", "obras de engenharia"];
+const NEGATIVE_TERMS = ["aquisicao de materiais", "obras de pavimentacao", "brinquedos", "generos alimenticios"];
 const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
 
 const SOURCE_CONFIG = {
@@ -49,10 +49,7 @@ function normalizeText(value) {
 
 function scoreESA(text) {
   const lowered = normalizeText(text);
-  const hasAcquisition = lowered.includes("aquisicao");
-  const hasPhysicalItems = ["brinquedos", "materiais", "veiculos", "itens fisicos"].some((term) => lowered.includes(term));
-
-  if (NEGATIVE_TERMS.some((term) => lowered.includes(normalizeText(term))) || (hasAcquisition && hasPhysicalItems)) {
+  if (NEGATIVE_TERMS.some((term) => lowered.includes(normalizeText(term)))) {
     return {
       score: 0,
       hidden: true,
@@ -71,10 +68,17 @@ function scoreESA(text) {
     }
   }
 
-  score += PRIORITY_CNAES.filter((code) => lowered.includes(code)).length * 5;
-
-  if (lowered.includes("quilombola") || lowered.includes("clpi")) {
+  if (
+    lowered.includes("clpi") ||
+    lowered.includes("consulta previa") ||
+    lowered.includes("quilombola") ||
+    lowered.includes("indigena") ||
+    lowered.includes("diagnostico socioambiental") ||
+    lowered.includes("convencao 169")
+  ) {
     score = 10;
+  } else {
+    score = Math.min(9, score + PRIORITY_CNAES.filter((code) => lowered.includes(code)).length * 5);
   }
 
   return {
@@ -222,7 +226,7 @@ function consolidateRows(rows, keywords) {
     consolidated.push({
       ...row,
       orgao_cnpj: String(row.orgao_cnpj || "").replace(/\D/g, "") || null,
-      esa_score: esa.score + keywordHits * 2,
+      esa_score: Math.min(10, esa.score + keywordHits * 2),
       matched_signals: esa.matched,
       keyword_hits: keywordHits
     });

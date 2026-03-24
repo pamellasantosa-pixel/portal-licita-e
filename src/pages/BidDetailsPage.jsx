@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
+import { evaluateEsaScore, isEmailLike, sanitizeCnpj } from "../lib/esaScoring";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
 
@@ -80,8 +81,9 @@ function extractCnpjFromBid(bid) {
 }
 
 function generatePNCPUrl(bid) {
-  const cnpj = String(bid?.orgao_cnpj || "").replace(/\D/g, "");
-  if (cnpj.length === 14) return `${PNCP_EDITAIS_BASE_URL}?q=${cnpj}&pagina=1`;
+  if (isEmailLike(bid?.orgao_cnpj)) return `${PNCP_EDITAIS_BASE_URL}`;
+  const cnpj = sanitizeCnpj(bid?.orgao_cnpj);
+  if (cnpj) return `${PNCP_EDITAIS_BASE_URL}?q=${cnpj}`;
   return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
 }
 
@@ -144,38 +146,13 @@ function canEmbedInIframe(url) {
   return url.startsWith("https://") && /\.pdf($|\?)/i.test(url);
 }
 
-function normalizeText(value) {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
 function calculateRealtimeEsaScore(bid) {
-  const corpus = normalizeText(
-    `${bid?.title || ""} ${bid?.description || ""} ${bid?.organization_name || ""} ${bid?.modality || ""} ${bid?.pncp_id || ""}`
-  );
-
-  const rules = [
-    { label: "CLPI", points: 6, terms: ["clpi", "consulta livre", "consulta previa", "convencao 169"] },
-    { label: "Quilombola", points: 6, terms: ["quilombola", "componente quilombola"] },
-    { label: "Diagnostico Socioambiental", points: 8, terms: ["diagnostico socioambiental"] }
-  ];
-
-  let score = 0;
-  const matched = [];
-
-  for (const rule of rules) {
-    if (rule.terms.some((term) => corpus.includes(normalizeText(term)))) {
-      score += rule.points;
-      matched.push(rule.label);
-    }
-  }
-
+  const text = `${bid?.title || ""} ${bid?.description || ""} ${bid?.organization_name || ""} ${bid?.modality || ""} ${bid?.pncp_id || ""}`;
+  const esa = evaluateEsaScore(text);
   return {
-    score,
-    matched,
-    isHighAdherence: score >= 6
+    score: esa.score,
+    matched: esa.matchedTopTerms || [],
+    isHighAdherence: esa.highAdherence
   };
 }
 
