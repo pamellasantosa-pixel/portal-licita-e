@@ -19,6 +19,12 @@ npm install
 
 2. Crie `.env` a partir de `.env.example` e preencha as chaves.
 
+Variavel obrigatoria para busca federal no Compras.gov:
+
+```bash
+COMPRAS_GOV_API_BASE_URL=https://api.compras.gov.br/licitacoes/v1/licitacoes
+```
+
 3. Rode em desenvolvimento:
 
 ```bash
@@ -37,4 +43,5 @@ npm run dev
 ## Observacoes
 
 - O endpoint do PNCP pode variar o formato de resposta; o service foi preparado para `data`, `itens` ou array direto.
-- Em producao na Vercel, configure as variaveis de ambiente no painel do projeto.
+- Em producao na Vercel, configure as variaveis de ambiente no painel do projeto em `Project Settings > Environment Variables`.
+- Em ambiente local, adicione as mesmas variaveis no arquivo `.env` na raiz do projeto.

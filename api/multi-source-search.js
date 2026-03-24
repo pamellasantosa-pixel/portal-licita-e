@@ -1,10 +1,12 @@
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 
-const GOLDEN_TERMS = [
+const FEDERAL_PRIORITY_ORGS = ["INCRA", "FUNAI", "IBAMA", "ICMBio", "MMA"];
+
+const FEDERAL_CRITICAL_TERMS = [
   "Estudo de Componente Quilombola",
-  "Plano de Manejo",
-  "Diagnostico Socioterritorial",
-  "Consulta Previa OIT 169"
+  "Diagnostico Socioambiental",
+  "Relatorio de Impacto a Comunidade",
+  "Consulta OIT 169"
 ];
 
 const PRIORITY_SCORING = [
@@ -20,23 +22,12 @@ const NEGATIVE_TERMS = ["aquisicao de materiais", "obras de pavimentacao", "brin
 const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
 
 const SOURCE_CONFIG = {
-  licitacoes_e: {
-    name: "Licitacoes-e (BB)",
-    template:
-      process.env.LICITACOES_E_SEARCH_TEMPLATE ||
-      "https://www.licitacoes-e.com.br/aop/consulta-licitacoes?texto={query}"
-  },
   compras_gov: {
-    name: "Compras.gov.br",
+    name: "Compras.gov.br Federal",
+    apiBase: process.env.COMPRAS_GOV_API_BASE_URL || "https://api.compras.gov.br/licitacoes/v1/licitacoes",
     template:
       process.env.COMPRAS_GOV_SEARCH_TEMPLATE ||
       "https://www.gov.br/compras/pt-br/acesso-a-informacao/consulta-licitacoes?termo={query}"
-  },
-  portal_compras_publicas: {
-    name: "Portal de Compras Publicas",
-    template:
-      process.env.PORTAL_COMPRAS_PUBLICAS_SEARCH_TEMPLATE ||
-      "https://www.portaldecompraspublicas.com.br/processos?tt={query}"
   }
 };
 
@@ -47,7 +38,20 @@ function normalizeText(value) {
     .toLowerCase();
 }
 
-function scoreESA(text) {
+function isPriorityFederalOrg(orgName) {
+  const normalized = normalizeText(orgName);
+  return FEDERAL_PRIORITY_ORGS.some((org) => normalized.includes(normalizeText(org)));
+}
+
+function hasFederalAutoTop(text, orgName) {
+  const normalizedText = normalizeText(text);
+  const normalizedOrg = normalizeText(orgName);
+  const isIncraOrFunai = normalizedOrg.includes("incra") || normalizedOrg.includes("funai");
+  if (!isIncraOrFunai) return false;
+  return normalizedText.includes("quilombola") || normalizedText.includes("indigena");
+}
+
+function scoreESA(text, context = {}) {
   const lowered = normalizeText(text);
   if (NEGATIVE_TERMS.some((term) => lowered.includes(normalizeText(term)))) {
     return {
@@ -55,6 +59,15 @@ function scoreESA(text) {
       hidden: true,
       matched: [],
       negatives: NEGATIVE_TERMS.filter((term) => lowered.includes(normalizeText(term)))
+    };
+  }
+
+  if (hasFederalAutoTop(text, context.organization || "")) {
+    return {
+      score: 10,
+      hidden: false,
+      matched: ["federal_incra_funai", "quilombola_ou_indigena"],
+      negatives: []
     };
   }
 
@@ -178,7 +191,86 @@ async function fetchPncpByKeywords(keywords) {
   }));
 }
 
-async function scrapeSourceByKeywords(sourceName, template, keywords) {
+function normalizeApiItems(payload) {
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.resultado)) return payload.resultado;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function firstNonEmpty(values) {
+  for (const value of values) {
+    if (value != null && String(value).trim() !== "") return String(value).trim();
+  }
+  return "";
+}
+
+function parseComprasGovApiRows(payload, orgName, term) {
+  const items = normalizeApiItems(payload);
+  return items.map((item) => {
+    const title = firstNonEmpty([
+      item.title,
+      item.titulo,
+      item.objeto,
+      item.objetoCompra,
+      item.descricao,
+      `Licitacao ${orgName}`
+    ]);
+
+    const detailUrl = firstNonEmpty([
+      item.url,
+      item.link,
+      item.href,
+      item.details_url,
+      item.linkDetalhe,
+      item.edital_url,
+      item.linkEdital
+    ]);
+
+    const organization = firstNonEmpty([
+      item.organization,
+      item.orgao,
+      item.orgao_nome,
+      item.uasg_nome,
+      orgName
+    ]);
+
+    return {
+      source: SOURCE_CONFIG.compras_gov.name,
+      title,
+      description: firstNonEmpty([item.description, item.descricao, item.resumo, term]),
+      organization,
+      orgao_cnpj: String(item.orgao_cnpj || item.cnpj || "").replace(/\D/g, "") || null,
+      published_date: item.published_date || item.dataPublicacao || item.data_publicacao || null,
+      url: detailUrl || SOURCE_CONFIG.compras_gov.template.replace("{query}", encodeURIComponent(`${orgName} ${term}`))
+    };
+  });
+}
+
+async function fetchComprasGovFederalViaApi(orgName, term) {
+  if (!SOURCE_CONFIG.compras_gov.apiBase) return [];
+
+  const params = new URLSearchParams({
+    orgao: orgName,
+    termo: term,
+    pagina: "1",
+    tamanhoPagina: "20"
+  });
+
+  const url = `${SOURCE_CONFIG.compras_gov.apiBase}?${params.toString()}`;
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Licita-E/1.0 (busca federal ESA)"
+    }
+  }).catch(() => null);
+
+  if (!response || !response.ok) return [];
+  const payload = await response.json().catch(() => null);
+  return parseComprasGovApiRows(payload, orgName, term);
+}
+
+async function scrapeSourceByKeywords(sourceName, template, keywords, fallbackOrganization = "") {
   const rows = [];
 
   for (const keyword of keywords) {
@@ -198,10 +290,39 @@ async function scrapeSourceByKeywords(sourceName, template, keywords) {
         source: sourceName,
         title: anchor.text,
         description: keyword,
-        organization: "Nao informado",
+        organization: fallbackOrganization || "Nao informado",
         published_date: null,
         url: anchor.href
       });
+    }
+  }
+
+  return rows;
+}
+
+async function fetchComprasGovFederal(terms, warnings) {
+  const rows = [];
+
+  for (const orgName of FEDERAL_PRIORITY_ORGS) {
+    for (const term of terms) {
+      const apiRows = await fetchComprasGovFederalViaApi(orgName, term).catch(() => []);
+      if (apiRows.length > 0) {
+        rows.push(...apiRows);
+        continue;
+      }
+
+      const scrapedRows = await scrapeSourceByKeywords(
+        SOURCE_CONFIG.compras_gov.name,
+        SOURCE_CONFIG.compras_gov.template,
+        [`${orgName} ${term}`],
+        orgName
+      ).catch(() => []);
+
+      if (scrapedRows.length === 0) {
+        warnings.push(`Sem retorno no Compras.gov.br para ${orgName} com termo: ${term}`);
+      }
+
+      rows.push(...scrapedRows);
     }
   }
 
@@ -218,7 +339,9 @@ function consolidateRows(rows, keywords) {
     seen.add(identity);
 
     const text = `${row.title} ${row.description || ""} ${row.organization || ""}`;
-    const esa = scoreESA(text);
+    if (!isPriorityFederalOrg(row.organization || "")) continue;
+
+    const esa = scoreESA(text, { organization: row.organization || "" });
     if (esa.hidden) continue;
 
     const keywordHits = keywords.filter((term) => normalizeText(text).includes(normalizeText(term))).length;
@@ -247,7 +370,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const keywords = Array.isArray(req.body?.keywords) && req.body.keywords.length > 0 ? req.body.keywords : GOLDEN_TERMS;
+  const keywords =
+    Array.isArray(req.body?.keywords) && req.body.keywords.length > 0 ? req.body.keywords : FEDERAL_CRITICAL_TERMS;
   const warnings = [];
 
   try {
@@ -256,26 +380,12 @@ export default async function handler(req, res) {
       return [];
     });
 
-    const [licitacoesRows, comprasGovRows, portalRows] = await Promise.all([
-      scrapeSourceByKeywords(SOURCE_CONFIG.licitacoes_e.name, SOURCE_CONFIG.licitacoes_e.template, keywords).catch(() => {
-        warnings.push("Licitacoes-e indisponivel para scraping/API no momento");
-        return [];
-      }),
-      scrapeSourceByKeywords(SOURCE_CONFIG.compras_gov.name, SOURCE_CONFIG.compras_gov.template, keywords).catch(() => {
-        warnings.push("Compras.gov.br indisponivel para scraping/API no momento");
-        return [];
-      }),
-      scrapeSourceByKeywords(
-        SOURCE_CONFIG.portal_compras_publicas.name,
-        SOURCE_CONFIG.portal_compras_publicas.template,
-        keywords
-      ).catch(() => {
-        warnings.push("Portal de Compras Publicas indisponivel para scraping/API no momento");
-        return [];
-      })
-    ]);
+    const comprasGovRows = await fetchComprasGovFederal(keywords, warnings).catch(() => {
+      warnings.push("Compras.gov.br indisponivel para scraping/API no momento");
+      return [];
+    });
 
-    const consolidated = consolidateRows([...pncpRows, ...licitacoesRows, ...comprasGovRows, ...portalRows], keywords);
+    const consolidated = consolidateRows([...pncpRows, ...comprasGovRows], keywords);
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     return res.status(200).json({

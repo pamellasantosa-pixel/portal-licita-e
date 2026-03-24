@@ -3,7 +3,7 @@ import { syncPncBids } from "../services/pncpService";
 import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
-import { evaluateEsaScore, isEmailLike, sanitizeCnpj } from "../lib/esaScoring";
+import { evaluateEsaScore, isEmailLike, isPriorityFederalOrg, sanitizeCnpj } from "../lib/esaScoring";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -17,8 +17,8 @@ function formatCurrencyBRL(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
 }
 
-function normalizeScoreForRanking(text) {
-  return evaluateEsaScore(text).score;
+function normalizeScoreForRanking(text, organizationName) {
+  return evaluateEsaScore(text, { organizationName }).score;
 }
 
 function buildPncpUrlByCnpj(bid) {
@@ -26,6 +26,15 @@ function buildPncpUrlByCnpj(bid) {
   if (isEmailLike(bid?.orgao_cnpj)) return "https://pncp.gov.br/app/editais";
   if (!cnpj) return "https://pncp.gov.br/app/editais?pagina=1";
   return `https://pncp.gov.br/app/editais?q=${cnpj}`;
+}
+
+function buildDetailsUrl(bid) {
+  const source = String(bid?.source || "").toLowerCase();
+  const directUrl = String(bid?.source_url || "").trim();
+  if (source.includes("compras.gov") && /^https?:\/\//i.test(directUrl)) {
+    return directUrl;
+  }
+  return buildPncpUrlByCnpj(bid);
 }
 
 function extractMunicipioEstado(orgaoNome = "") {
@@ -141,9 +150,9 @@ export default function BidsPage() {
         status: row.status || "em_analise",
         source_url: row.link_edital,
         orgao_cnpj: cnpjById[row.id] || "",
-        alta_aderencia: evaluateEsaScore(`${row.objeto_descricao || ""}`).highAdherence,
-        aderencia_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`),
-        esa_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`),
+        alta_aderencia: evaluateEsaScore(`${row.objeto_descricao || ""}`, { organizationName: row.orgao_nome || "" }).highAdherence,
+        aderencia_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`, row.orgao_nome || ""),
+        esa_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`, row.orgao_nome || ""),
         cnae_principal: row.cnae_principal || ""
       }));
 
@@ -168,9 +177,11 @@ export default function BidsPage() {
           status: "em_analise",
           source_url: row.url,
           orgao_cnpj: sanitizeCnpj(row.orgao_cnpj),
-          alta_aderencia: evaluateEsaScore(`${row.title || ""} ${row.description || ""}`).highAdherence,
-          aderencia_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`),
-          esa_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`),
+          alta_aderencia: evaluateEsaScore(`${row.title || ""} ${row.description || ""}`, {
+            organizationName: row.organization || ""
+          }).highAdherence,
+          aderencia_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`, row.organization || ""),
+          esa_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`, row.organization || ""),
           cnae_principal: "",
           municipio: "-",
           estado: "-"
@@ -180,7 +191,9 @@ export default function BidsPage() {
       }
 
       const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter((row) => {
-        const rule = evaluateEsaScore(`${row.title} ${row.description || ""}`);
+        const rule = evaluateEsaScore(`${row.title} ${row.description || ""}`, {
+          organizationName: row.organization_name || ""
+        });
         return !rule.hidden;
       });
 
@@ -324,6 +337,11 @@ export default function BidsPage() {
                   <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                     <div>
                       <div className="mb-2 flex flex-wrap items-center gap-2">
+                        {isPriorityFederalOrg(bid.organization_name || "") && (
+                          <span className="rounded-full border border-[#C8A74E] bg-[#0B1F3A] px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-[#F3D27A]">
+                            Federal Prioritario
+                          </span>
+                        )}
                         {bid.alta_aderencia && (
                           <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
                             Alta Aderencia
@@ -357,7 +375,7 @@ export default function BidsPage() {
                       </p>
                     </div>
                     <a
-                      href={buildPncpUrlByCnpj(bid)}
+                      href={buildDetailsUrl(bid)}
                       target="_blank"
                       rel="noreferrer"
                       className="rounded-lg bg-brand-cyan px-4 py-2 text-center font-heading text-xs font-semibold uppercase tracking-wider text-white"
