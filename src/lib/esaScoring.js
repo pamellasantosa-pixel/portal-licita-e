@@ -20,6 +20,36 @@ const ESA_EXCLUSION_TERMS = [
 
 const FEDERAL_PRIORITY_ORGS = ["incra", "funai", "ibama", "icmbio", "mma"];
 
+const BRAZIL_STATE_NAMES = [
+  "ACRE",
+  "ALAGOAS",
+  "AMAPA",
+  "AMAZONAS",
+  "BAHIA",
+  "CEARA",
+  "DISTRITO FEDERAL",
+  "ESPIRITO SANTO",
+  "GOIAS",
+  "MARANHAO",
+  "MATO GROSSO",
+  "MATO GROSSO DO SUL",
+  "MINAS GERAIS",
+  "PARA",
+  "PARAIBA",
+  "PARANA",
+  "PERNAMBUCO",
+  "PIAUI",
+  "RIO DE JANEIRO",
+  "RIO GRANDE DO NORTE",
+  "RIO GRANDE DO SUL",
+  "RONDONIA",
+  "RORAIMA",
+  "SANTA CATARINA",
+  "SAO PAULO",
+  "SERGIPE",
+  "TOCANTINS"
+];
+
 function normalizeText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -81,8 +111,19 @@ export function cleanOrganName(value) {
   text = text
     .replace(/\bPREFEITURA MUNICIPAL DE\b/gi, "")
     .replace(/\bFUNDO MUNICIPAL DE\b/gi, "")
+    .replace(/\bSEPLAN\b/gi, "")
+    .replace(/\bUCP\b/gi, "")
+    .replace(/\bSECRETARIA\b/gi, "")
+    .replace(/\bDEPARTAMENTO\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const normalized = normalizeText(text);
+  for (const stateName of BRAZIL_STATE_NAMES) {
+    if (normalized.includes(normalizeText(stateName))) {
+      return stateName;
+    }
+  }
 
   return text;
 }
