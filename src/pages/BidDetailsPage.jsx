@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
-import { evaluateEsaScore, extractScoreSearchTerm, sanitizeOrgNameForPncpSearch } from "../lib/esaScoring";
+import { cleanOrganName, evaluateEsaScore, extractScoreSearchTerm, sanitizeOrgNameForPncpSearch } from "../lib/esaScoring";
 import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
@@ -72,10 +72,11 @@ function parsePncpControl(value) {
 }
 
 function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluation = {}) {
-  const orgTerm = sanitizeOrgNameForPncpSearch(orgName);
-  const scoreTerm = extractScoreSearchTerm(scoreReason, scoreEvaluation);
-  const words = String(scoreTerm || "").trim().split(/\s+/).filter(Boolean);
-  const formattedScoreTerm = words.length === 1 ? `"${scoreTerm}"` : scoreTerm;
+  const orgTerm = sanitizeOrgNameForPncpSearch(cleanOrganName(orgName));
+  const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || "")
+    .replace(/^"|"$/g, "")
+    .trim();
+  const formattedScoreTerm = scoreTerm ? `"${scoreTerm}"` : "";
 
   const normalizedOrg = String(orgTerm || "").toLowerCase();
   const normalizedScore = String(scoreTerm || "").toLowerCase();

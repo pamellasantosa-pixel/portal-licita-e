@@ -4,6 +4,7 @@ import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import {
+  cleanOrganName,
   evaluateEsaScore,
   extractScoreSearchTerm,
   isAbsoluteVeto,
@@ -26,10 +27,11 @@ function formatCurrencyBRL(value) {
 }
 
 function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluation = {}) {
-  const orgTerm = sanitizeOrgNameForPncpSearch(orgName);
-  const scoreTerm = extractScoreSearchTerm(scoreReason, scoreEvaluation);
-  const words = String(scoreTerm || "").trim().split(/\s+/).filter(Boolean);
-  const formattedScoreTerm = words.length === 1 ? `"${scoreTerm}"` : scoreTerm;
+  const orgTerm = sanitizeOrgNameForPncpSearch(cleanOrganName(orgName));
+  const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || "")
+    .replace(/^"|"$/g, "")
+    .trim();
+  const formattedScoreTerm = scoreTerm ? `"${scoreTerm}"` : "";
 
   const normalizedOrg = String(orgTerm || "").toLowerCase();
   const normalizedScore = String(scoreTerm || "").toLowerCase();
