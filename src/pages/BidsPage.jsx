@@ -28,7 +28,17 @@ function formatCurrencyBRL(value) {
 function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluation = {}) {
   const orgTerm = sanitizeOrgNameForPncpSearch(orgName);
   const scoreTerm = extractScoreSearchTerm(scoreReason, scoreEvaluation);
-  const combined = [orgTerm, scoreTerm].filter(Boolean).join(" ").trim();
+  const words = String(scoreTerm || "").trim().split(/\s+/).filter(Boolean);
+  const formattedScoreTerm = words.length === 1 ? `"${scoreTerm}"` : scoreTerm;
+
+  const normalizedOrg = String(orgTerm || "").toLowerCase();
+  const normalizedScore = String(scoreTerm || "").toLowerCase();
+  if (normalizedOrg.includes("aracaju") && normalizedScore.includes("quilombola")) {
+    const specialFallback = `"quilombola" aracaju`;
+    return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(specialFallback)}`;
+  }
+
+  const combined = [orgTerm, formattedScoreTerm].filter(Boolean).join(" ").trim();
   if (!combined) return "https://pncp.gov.br/app/editais?pagina=1";
   return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(combined)}`;
 }

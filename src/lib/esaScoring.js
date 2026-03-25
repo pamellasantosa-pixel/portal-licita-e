@@ -74,20 +74,21 @@ export function extractScoreSearchTerm(reason, evaluation = {}) {
   return "";
 }
 
-export function sanitizeOrgNameForPncpSearch(value) {
+export function cleanOrganName(value) {
   let text = String(value || "").trim();
   if (!text) return "";
 
   text = text
     .replace(/\bPREFEITURA MUNICIPAL DE\b/gi, "")
-    .replace(/\bMUNICIPIO DE\b/gi, "")
-    .replace(/\bPREFEITURA DE\b/gi, "")
-    .replace(/\bSECRETARIA MUNICIPAL DE\b/gi, "")
-    .replace(/\bSECRETARIA DE\b/gi, "")
-    .replace(/\bGOVERNO DO ESTADO DE\b/gi, "")
-    .replace(/\bESTADO DE\b/gi, "")
-    .replace(/\s*\([^)]*\)\s*/g, " ")
-    .replace(/\s*[-/]\s*[A-Z]{2}\s*$/g, " ")
+    .replace(/\bFUNDO MUNICIPAL DE\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text;
+}
+
+export function sanitizeOrgNameForPncpSearch(value) {
+  let text = cleanOrganName(value)
     .replace(/\b[A-Z]{2,6}\b/g, (chunk) => {
       // Remove siglas administrativas comuns que poluem a busca.
       const upper = chunk.toUpperCase();
