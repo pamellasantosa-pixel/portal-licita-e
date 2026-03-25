@@ -4,6 +4,8 @@ import { getAllBids } from "../services/bidsService";
 import { useEffect } from "react";
 import MainNav from "../components/MainNav";
 import { createManualAlert, deleteManualAlert, getManualAlerts } from "../services/manualAlertsService";
+import { evaluateEsaScore } from "../lib/esaScoring";
+import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(value));
@@ -61,6 +63,15 @@ export default function CalendarPage() {
     const bidEvents = bids
       .filter((item) => item.closing_date)
       .map((item) => ({
+        ...(function () {
+          const evaluation = evaluateEsaScore(`${item.title || ""} ${item.description || ""}`, {
+            organizationName: item.orgao_nome || item.organization_name || ""
+          });
+          return {
+            scoreReason: evaluation.reason || "sem_termo",
+            esaEvaluation: evaluation
+          };
+        })(),
         type: "Prazo do edital",
         date: item.closing_date,
         title: item.title,
@@ -181,6 +192,7 @@ export default function CalendarPage() {
                           <span className="rounded-full bg-brand-cyan/10 px-2 py-1 text-brand-cyan">
                             Score: {eventItem.score ?? "-"}
                           </span>
+                          <ScoreReasonBadge reason={eventItem.scoreReason} evaluation={eventItem.esaEvaluation} />
                           <span className="rounded-full bg-brand-sand px-2 py-1 text-brand-brown">
                             Municipio: {eventItem.municipio || "Municipio nao informado"}
                           </span>

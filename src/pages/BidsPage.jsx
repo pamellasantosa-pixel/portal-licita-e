@@ -3,7 +3,15 @@ import { syncPncBids } from "../services/pncpService";
 import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
-import { evaluateEsaScore, isEmailLike, isPriorityFederalOrg, sanitizeCnpj } from "../lib/esaScoring";
+import {
+  evaluateEsaScore,
+  extractScoreSearchTerm,
+  isAbsoluteVeto,
+  isPriorityFederalOrg,
+  sanitizeOrgNameForPncpSearch,
+  sanitizeCnpj
+} from "../lib/esaScoring";
+import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 function formatDate(value) {
   if (!value) return "-";
@@ -17,23 +25,21 @@ function formatCurrencyBRL(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(numeric);
 }
 
-function normalizeScoreForRanking(text, organizationName) {
-  return evaluateEsaScore(text, { organizationName }).score;
+function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluation = {}) {
+  const orgTerm = sanitizeOrgNameForPncpSearch(orgName);
+  const scoreTerm = extractScoreSearchTerm(scoreReason, scoreEvaluation);
+  const combined = [orgTerm, scoreTerm].filter(Boolean).join(" ").trim();
+  if (!combined) return "https://pncp.gov.br/app/editais?pagina=1";
+  return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(combined)}`;
 }
 
 function buildPncpUrlByCnpj(bid) {
-  const cnpj = sanitizeCnpj(bid?.orgao_cnpj);
-  if (isEmailLike(bid?.orgao_cnpj)) return "https://pncp.gov.br/app/editais";
-  if (!cnpj) return "https://pncp.gov.br/app/editais?pagina=1";
-  return `https://pncp.gov.br/app/editais?q=${cnpj}`;
+  const reason = bid?.score_reason || bid?.esa_evaluation?.reason || "sem_termo";
+  const evaluation = bid?.esa_evaluation || {};
+  return buildPncpUrlByOrgName(bid?.organization_name || bid?.orgao_nome, reason, evaluation);
 }
 
 function buildDetailsUrl(bid) {
-  const source = String(bid?.source || "").toLowerCase();
-  const directUrl = String(bid?.source_url || "").trim();
-  if (source.includes("compras.gov") && /^https?:\/\//i.test(directUrl)) {
-    return directUrl;
-  }
   return buildPncpUrlByCnpj(bid);
 }
 
@@ -137,6 +143,17 @@ export default function BidsPage() {
       }
 
       const normalizedInternal = (data || []).map((row) => ({
+        ...(function () {
+          const textForScoring = `${row.objeto_descricao || ""}`;
+          const evaluation = evaluateEsaScore(textForScoring, { organizationName: row.orgao_nome || "" });
+          return {
+            alta_aderencia: evaluation.highAdherence,
+            aderencia_score: evaluation.score,
+            esa_score: evaluation.score,
+            score_reason: evaluation.reason || "sem_termo",
+            esa_evaluation: evaluation
+          };
+        })(),
         ...extractMunicipioEstado(row.orgao_nome),
         id: row.id,
         rowType: "internal",
@@ -150,9 +167,6 @@ export default function BidsPage() {
         status: row.status || "em_analise",
         source_url: row.link_edital,
         orgao_cnpj: cnpjById[row.id] || "",
-        alta_aderencia: evaluateEsaScore(`${row.objeto_descricao || ""}`, { organizationName: row.orgao_nome || "" }).highAdherence,
-        aderencia_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`, row.orgao_nome || ""),
-        esa_score: normalizeScoreForRanking(`${row.objeto_descricao || ""}`, row.orgao_nome || ""),
         cnae_principal: row.cnae_principal || ""
       }));
 
@@ -165,6 +179,17 @@ export default function BidsPage() {
         }
 
         normalizedExternal = (payload.data || []).map((row, index) => ({
+          ...(function () {
+            const textForScoring = `${row.title || ""} ${row.description || ""}`;
+            const evaluation = evaluateEsaScore(textForScoring, { organizationName: row.organization || "" });
+            return {
+              alta_aderencia: evaluation.highAdherence,
+              aderencia_score: evaluation.score,
+              esa_score: evaluation.score,
+              score_reason: evaluation.reason || "sem_termo",
+              esa_evaluation: evaluation
+            };
+          })(),
           id: row.url || `external-${index}`,
           rowType: "external",
           source: row.source || "Externa",
@@ -177,11 +202,6 @@ export default function BidsPage() {
           status: "em_analise",
           source_url: row.url,
           orgao_cnpj: sanitizeCnpj(row.orgao_cnpj),
-          alta_aderencia: evaluateEsaScore(`${row.title || ""} ${row.description || ""}`, {
-            organizationName: row.organization || ""
-          }).highAdherence,
-          aderencia_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`, row.organization || ""),
-          esa_score: normalizeScoreForRanking(`${row.title || ""} ${row.description || ""}`, row.organization || ""),
           cnae_principal: "",
           municipio: "-",
           estado: "-"
@@ -191,10 +211,7 @@ export default function BidsPage() {
       }
 
       const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter((row) => {
-        const rule = evaluateEsaScore(`${row.title} ${row.description || ""}`, {
-          organizationName: row.organization_name || ""
-        });
-        return !rule.hidden;
+        return !isAbsoluteVeto(row.esa_evaluation);
       });
 
       hiddenFiltered.sort((a, b) => {
@@ -350,6 +367,7 @@ export default function BidsPage() {
                         <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-brand-cyan">
                           Score {bid.aderencia_score}
                         </span>
+                        <ScoreReasonBadge reason={bid.score_reason} evaluation={bid.esa_evaluation} />
                         <span className="rounded-full border border-brand-brown/20 bg-white px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
                           Municipio: {bid.municipio}
                         </span>
@@ -373,6 +391,11 @@ export default function BidsPage() {
                       <p className="mt-1 font-body text-xs text-brand-ink/60">
                         Publicado: {formatDate(bid.published_date)} | Encerramento: {formatDate(bid.closing_date)}
                       </p>
+                      {import.meta.env.DEV && (
+                        <p className="mt-1 font-body text-[11px] text-brand-ink/50">
+                          Termo que gerou o Score: {bid.score_reason || "sem_termo"}
+                        </p>
+                      )}
                     </div>
                     <a
                       href={buildDetailsUrl(bid)}

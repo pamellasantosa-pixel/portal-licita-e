@@ -35,6 +35,17 @@ function normalizePayload(payload) {
   return [];
 }
 
+function buildPncpSearchFallbackUrl(orgaoCnpj, organizationName) {
+  if (orgaoCnpj && String(orgaoCnpj).length === 14) {
+    return `${PNCP_BASE_URL}/app/editais?q=${orgaoCnpj}&pagina=1`;
+  }
+  const orgTerm = String(organizationName || "").trim();
+  if (orgTerm) {
+    return `${PNCP_BASE_URL}/app/editais?q=${encodeURIComponent(orgTerm)}&pagina=1`;
+  }
+  return `${PNCP_BASE_URL}/app/editais?pagina=1`;
+}
+
 function normalizePncpItem(item) {
   const title = item.title || item.objetoCompra || item.objeto || item.titulo || "Sem titulo";
   const description = item.description || item.descricao || item.objetoCompra || item.objeto || item.resumo || null;
@@ -48,7 +59,11 @@ function normalizePncpItem(item) {
       ? `/app/contratacoes${sourcePath.replace(/^\/compras/, "")}`
       : sourcePath;
 
-  const sourceUrl = normalizedPath.startsWith("http") ? normalizedPath : `${PNCP_BASE_URL}${normalizedPath}`;
+  const sourceUrl = normalizedPath
+    ? normalizedPath.startsWith("http")
+      ? normalizedPath
+      : `${PNCP_BASE_URL}${normalizedPath}`
+    : buildPncpSearchFallbackUrl(orgaoCnpj, organizationName);
 
   const publishedDate =
     item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();

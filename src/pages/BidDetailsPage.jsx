@@ -3,7 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
-import { evaluateEsaScore, isEmailLike, sanitizeCnpj } from "../lib/esaScoring";
+import { evaluateEsaScore, extractScoreSearchTerm, sanitizeOrgNameForPncpSearch } from "../lib/esaScoring";
+import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
 
@@ -70,21 +71,18 @@ function parsePncpControl(value) {
   return null;
 }
 
-function extractCnpjFromBid(bid) {
-  const byColumn = String(bid?.orgao_cnpj || "").replace(/\D/g, "");
-  if (byColumn.length === 14) return byColumn;
-  const parsed = parsePncpControl(bid?.pncp_id);
-  if (parsed?.cnpj) return parsed.cnpj;
-  const source = decodeRepeated(bid?.source_url || "");
-  const cnpjInPath = source.match(/\/(\d{14})\//);
-  return cnpjInPath?.[1] || "";
+function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluation = {}) {
+  const orgTerm = sanitizeOrgNameForPncpSearch(orgName);
+  const scoreTerm = extractScoreSearchTerm(scoreReason, scoreEvaluation);
+  const combined = [orgTerm, scoreTerm].filter(Boolean).join(" ").trim();
+  if (!combined) return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
+  return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(combined)}`;
 }
 
-function generatePNCPUrl(bid) {
-  if (isEmailLike(bid?.orgao_cnpj)) return `${PNCP_EDITAIS_BASE_URL}`;
-  const cnpj = sanitizeCnpj(bid?.orgao_cnpj);
-  if (cnpj) return `${PNCP_EDITAIS_BASE_URL}?q=${cnpj}`;
-  return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
+function generatePNCPUrl(bid, esaRealtime = null) {
+  const scoreReason = esaRealtime?.reason || "sem_termo";
+  const scoreEvaluation = esaRealtime?.evaluation || {};
+  return buildPncpUrlByOrgName(bid?.organization_name || bid?.orgao_nome, scoreReason, scoreEvaluation);
 }
 
 function isComprasGovFederalBid(bid) {
@@ -100,25 +98,16 @@ function toHttpsUrl(url) {
   return url;
 }
 
-function buildPncpSearchUrl(bid) {
-  return generatePNCPUrl(bid);
+function buildPncpSearchUrl(bid, esaRealtime = null) {
+  return generatePNCPUrl(bid, esaRealtime);
 }
 
-function buildPncpCnpjFallbackUrl(bid) {
-  const cnpj = extractCnpjFromBid(bid);
-  if (!cnpj) return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
-  const params = new URLSearchParams({
-    q: cnpj,
-    pagina: "1"
-  });
-  return `${PNCP_EDITAIS_BASE_URL}?${params.toString()}`;
+function buildPncpCnpjFallbackUrl(bid, esaRealtime = null) {
+  return generatePNCPUrl(bid, esaRealtime);
 }
 
-function buildPortalUrl(bid) {
-  if (isComprasGovFederalBid(bid) && /^https?:\/\//i.test(String(bid?.source_url || "").trim())) {
-    return String(bid.source_url).trim();
-  }
-  return generatePNCPUrl(bid);
+function buildPortalUrl(bid, esaRealtime = null) {
+  return generatePNCPUrl(bid, esaRealtime);
 }
 
 function shouldEnrichBid(bid) {
@@ -130,8 +119,8 @@ function shouldEnrichBid(bid) {
   return false;
 }
 
-function resolvePublicNoticeUrl(bid) {
-  const searchUrl = buildPncpSearchUrl(bid);
+function resolvePublicNoticeUrl(bid, esaRealtime = null) {
+  const searchUrl = buildPncpSearchUrl(bid, esaRealtime);
   const sourceUrl = toHttpsUrl(decodeRepeated(bid?.source_url || ""));
 
   if (!sourceUrl) {
@@ -161,7 +150,10 @@ function calculateRealtimeEsaScore(bid) {
   return {
     score: esa.score,
     matched: esa.matchedTopTerms || [],
-    isHighAdherence: esa.highAdherence
+    matchedExclusions: esa.matchedExclusions || [],
+    isHighAdherence: esa.highAdherence,
+    reason: esa.reason || "sem_termo",
+    evaluation: esa
   };
 }
 
@@ -174,15 +166,16 @@ export default function BidDetailsPage() {
   const [analysisRaw, setAnalysisRaw] = useState("");
   const didEnrichRef = useRef(false);
 
+  const esaRealtime = calculateRealtimeEsaScore(bid);
+
   // Botao principal abre busca pre-preenchida por orgao_cnpj.
-  const portalUrl = buildPortalUrl(bid);
+  const portalUrl = buildPortalUrl(bid, esaRealtime);
 
   // Para visualização/iframe, só usamos URL quando for PDF.
-  const editalUrl = resolvePublicNoticeUrl(bid);
-  const cnpjFallbackUrl = buildPncpCnpjFallbackUrl(bid);
+  const editalUrl = resolvePublicNoticeUrl(bid, esaRealtime);
+  const cnpjFallbackUrl = buildPncpCnpjFallbackUrl(bid, esaRealtime);
   const iframeAllowed = canEmbedInIframe(editalUrl);
   const analysis = parseAnalysisJson(analysisRaw);
-  const esaRealtime = calculateRealtimeEsaScore(bid);
 
   async function loadBid() {
     try {
@@ -330,6 +323,7 @@ export default function BidDetailsPage() {
             <span className="rounded-full bg-brand-cyan/10 px-3 py-1 font-body text-xs font-semibold text-brand-cyan">
               Score ESA (tempo real): {esaRealtime.score}
             </span>
+            <ScoreReasonBadge reason={esaRealtime.reason} evaluation={esaRealtime.evaluation} />
             {esaRealtime.matched.length > 0 && (
               <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
                 Sinais: {esaRealtime.matched.join(", ")}
@@ -344,7 +338,7 @@ export default function BidDetailsPage() {
               rel="noreferrer"
               className="rounded-xl border border-brand-brown/20 bg-white px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-brand-brown"
             >
-              Visualizar Edital no Portal
+              Ver no PNCP
             </a>
             <button
               onClick={() => handleAnalyze(false)}

@@ -80,6 +80,17 @@ function uniqTerms(values = []) {
   return Array.from(set);
 }
 
+function buildPncpSearchFallbackUrl(orgaoCnpj, organizationName) {
+  if (orgaoCnpj && String(orgaoCnpj).length === 14) {
+    return `${PNCP_BASE_URL}/app/editais?q=${orgaoCnpj}&pagina=1`;
+  }
+  const orgTerm = String(organizationName || "").trim();
+  if (orgTerm) {
+    return `${PNCP_BASE_URL}/app/editais?q=${encodeURIComponent(orgTerm)}&pagina=1`;
+  }
+  return `${PNCP_BASE_URL}/app/editais?pagina=1`;
+}
+
 function parseNumericValue(value) {
   if (value == null) return null;
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -157,9 +168,13 @@ function normalizePncpItem(item) {
       ? `/app/contratacoes${sourcePath.replace(/^\/compras/, "")}`
       : sourcePath;
 
-  const sourceUrlRaw = normalizedPath.startsWith("http") ? normalizedPath : `${PNCP_BASE_URL}${normalizedPath}`;
-  const sourceUrl = isEmailLike(sourceUrlRaw)
-    ? `${PNCP_BASE_URL}/app/editais?q=${orgaoCnpj || ""}&pagina=1`
+  const sourceUrlRaw = normalizedPath
+    ? normalizedPath.startsWith("http")
+      ? normalizedPath
+      : `${PNCP_BASE_URL}${normalizedPath}`
+    : "";
+  const sourceUrl = !sourceUrlRaw || isEmailLike(sourceUrlRaw)
+    ? buildPncpSearchFallbackUrl(orgaoCnpj, organizationName)
     : sourceUrlRaw;
   const publishedDate = item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();
   const closingDate = item.data_fim_vigencia || item.dataEncerramentoProposta || null;

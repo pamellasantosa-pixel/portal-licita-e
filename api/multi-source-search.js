@@ -18,8 +18,18 @@ const PRIORITY_SCORING = [
   { label: "Mediacao de Conflitos", terms: ["mediacao de conflitos", "mediacao"], weight: 10 }
 ];
 
-const NEGATIVE_TERMS = ["aquisicao de materiais", "obras de pavimentacao", "brinquedos", "generos alimenticios"];
+const NEGATIVE_TERMS = [
+  "aquisicao de materiais",
+  "pavimentacao",
+  "obras de pavimentacao",
+  "brinquedo",
+  "brinquedos",
+  "alimenticio",
+  "alimenticios",
+  "generos alimenticios"
+];
 const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
+const COMPRAS_GOV_TIMEOUT_MS = 10000;
 
 const SOURCE_CONFIG = {
   compras_gov: {
@@ -111,6 +121,18 @@ function normalizePncpItems(payload) {
   return [];
 }
 
+function buildPncpSearchUrl(orgaoCnpj, organizationName) {
+  const cleaned = String(orgaoCnpj || "").replace(/\D/g, "");
+  if (cleaned.length === 14) {
+    return `https://pncp.gov.br/app/editais?q=${cleaned}`;
+  }
+  const term = String(organizationName || "").trim();
+  if (term) {
+    return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(term)}`;
+  }
+  return "https://pncp.gov.br/app/editais?pagina=1";
+}
+
 function makeAbsoluteUrl(baseUrl, url) {
   if (!url) return baseUrl;
   if (/^https?:\/\//i.test(url)) return url;
@@ -180,15 +202,29 @@ async function fetchPncpByKeywords(keywords) {
   }
 
   return all.map((item) => ({
+    ...(function () {
+      const organizationName =
+        item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado";
+      const cleanedCnpj = String(item.orgaoEntidade?.cnpj || item.cnpj || "").replace(/\D/g, "");
+      const validCnpj = cleanedCnpj.length === 14 ? cleanedCnpj : null;
+      const fallbackUrl = buildPncpSearchUrl(validCnpj, organizationName);
+      const deepLink = item.item_url
+        ? `https://pncp.gov.br/app/contratacoes${String(item.item_url).replace(/^\/compras/, "")}`
+        : fallbackUrl;
+      return {
+        organizationName,
+        validCnpj,
+        resolvedUrl: deepLink
+      };
+    })(),
     source: "PNCP",
     title: item.title || item.objetoCompra || item.objeto || "Sem titulo",
     description: item.description || item.descricao || item.objetoCompra || item.objeto || "",
-    organization:
-      item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado",
-    orgao_cnpj: String(item.orgaoEntidade?.cnpj || item.cnpj || "").replace(/\D/g, "") || null,
+    organization: organizationName,
+    orgao_cnpj: validCnpj,
     published_date: item.data_publicacao_pncp || item.dataPublicacao || null,
-    url: item.item_url ? `https://pncp.gov.br/app/contratacoes${String(item.item_url).replace(/^\/compras/, "")}` : "https://pncp.gov.br/app/editais"
-  }));
+    url: resolvedUrl
+  })).map(({ organizationName, validCnpj, resolvedUrl, ...rest }) => rest);
 }
 
 function normalizeApiItems(payload) {
@@ -204,6 +240,16 @@ function firstNonEmpty(values) {
     if (value != null && String(value).trim() !== "") return String(value).trim();
   }
   return "";
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = COMPRAS_GOV_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function parseComprasGovApiRows(payload, orgName, term) {
@@ -259,11 +305,15 @@ async function fetchComprasGovFederalViaApi(orgName, term) {
   });
 
   const url = `${SOURCE_CONFIG.compras_gov.apiBase}?${params.toString()}`;
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "Licita-E/1.0 (busca federal ESA)"
-    }
-  }).catch(() => null);
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: {
+        "User-Agent": "Licita-E/1.0 (busca federal ESA)"
+      }
+    },
+    COMPRAS_GOV_TIMEOUT_MS
+  ).catch(() => null);
 
   if (!response || !response.ok) return [];
   const payload = await response.json().catch(() => null);
@@ -275,11 +325,15 @@ async function scrapeSourceByKeywords(sourceName, template, keywords, fallbackOr
 
   for (const keyword of keywords) {
     const url = template.replace("{query}", encodeURIComponent(keyword));
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Licita-E/1.0 (busca de oportunidades ESA)"
-      }
-    }).catch(() => null);
+    const response = await fetchWithTimeout(
+      url,
+      {
+        headers: {
+          "User-Agent": "Licita-E/1.0 (busca de oportunidades ESA)"
+        }
+      },
+      COMPRAS_GOV_TIMEOUT_MS
+    ).catch(() => null);
 
     if (!response || !response.ok) continue;
     const html = await response.text();

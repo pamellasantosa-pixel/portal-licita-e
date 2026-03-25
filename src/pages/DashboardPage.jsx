@@ -5,6 +5,8 @@ import { syncPncBids } from "../services/pncpService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
 import { getActiveKeywords } from "../services/settingsService";
+import { evaluateEsaScore } from "../lib/esaScoring";
+import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 const AUTO_SYNC_KEY = "licitae_dashboard_last_auto_sync";
 const AUTO_SYNC_INTERVAL_MS = 1000 * 60 * 60 * 3; // 3 horas
@@ -195,6 +197,12 @@ export default function DashboardPage() {
             <ul className="space-y-4">
               {filteredBids.map((bid) => (
                 <li key={bid.id} className="rounded-xl border border-brand-brown/10 p-4 transition hover:bg-brand-sand/40">
+                  {(() => {
+                    const evaluation = evaluateEsaScore(`${bid.title || ""} ${bid.description || ""}`, {
+                      organizationName: bid.organization_name || bid.orgao_nome || ""
+                    });
+                    return <ScoreReasonBadge reason={evaluation.reason} evaluation={evaluation} />;
+                  })()}
                   <h3 className="font-heading text-lg text-brand-brown">{bid.title}</h3>
                   <p className="mt-1 font-body text-sm text-brand-ink/80">{bid.organization_name || "Orgao nao informado"}</p>
                   {bid.orgao_cnpj && <p className="mt-1 font-body text-xs text-brand-ink/65">CNPJ: {bid.orgao_cnpj}</p>}
