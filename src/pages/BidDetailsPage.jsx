@@ -76,16 +76,15 @@ function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluati
   const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || "")
     .replace(/^"|"$/g, "")
     .trim();
-  const formattedScoreTerm = scoreTerm ? `"${scoreTerm}"` : "";
 
   const normalizedOrg = String(orgTerm || "").toLowerCase();
   const normalizedScore = String(scoreTerm || "").toLowerCase();
   if (normalizedOrg.includes("aracaju") && normalizedScore.includes("quilombola")) {
-    const specialFallback = `"quilombola" aracaju`;
+    const specialFallback = "quilombola aracaju edital";
     return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(specialFallback)}`;
   }
 
-  const combined = [orgTerm, formattedScoreTerm].filter(Boolean).join(" ").trim();
+  const combined = [orgTerm, scoreTerm, "edital"].filter(Boolean).join(" ").trim();
   if (!combined) return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
   return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(combined)}`;
 }
