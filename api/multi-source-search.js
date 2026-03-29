@@ -233,6 +233,7 @@ function extractAnchors(html, pageUrl) {
 async function fetchPncpByKeywords(keywords) {
   const statuses = ["recebendo_proposta", "1", "2", "3", "4", "5"];
   const all = [];
+  const errors = [];
 
   for (const keyword of keywords) {
     const jobs = statuses.map(async (status) => {
@@ -244,14 +245,28 @@ async function fetchPncpByKeywords(keywords) {
         tamanhoPagina: "20"
       });
 
-      const response = await fetch(`${PNCP_SEARCH_URL}?${params.toString()}`);
-      if (!response.ok) return [];
-      const payload = await response.json().catch(() => null);
-      return normalizePncpItems(payload);
+      try {
+        const response = await fetch(`${PNCP_SEARCH_URL}?${params.toString()}`, {
+          headers: { "User-Agent": "Licita-E/1.0 (PNCP multi-source)" }
+        });
+        if (!response.ok) {
+          errors.push(`pncp_http_${response.status}:${keyword}:${status}`);
+          return [];
+        }
+        const payload = await response.json().catch(() => null);
+        return normalizePncpItems(payload);
+      } catch (error) {
+        errors.push(`pncp_network:${keyword}:${status}:${String(error?.message || error)}`);
+        return [];
+      }
     });
 
     const result = await Promise.all(jobs);
     all.push(...result.flat());
+  }
+
+  if (all.length === 0 && errors.length > 0) {
+    throw new Error(errors.slice(0, 3).join(" | "));
   }
 
   return all.map((item) => ({
