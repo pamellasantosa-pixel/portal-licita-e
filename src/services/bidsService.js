@@ -29,10 +29,10 @@ export async function getAllBids() {
   // Primeiro tenta ler schema estendido (aderencia/valor). Se o banco ainda nao foi migrado,
   // cai automaticamente para o schema basico sem quebrar a aplicacao.
   const extendedSelect =
-    "id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,orgao_nome,source_url,pncp_id,modality,aderencia_score,alta_aderencia,valor_estimado";
+    "id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,orgao_nome,municipio_orgao,orgao_cnpj,edital_ano,edital_sequencial,source_url,pncp_id,modality,aderencia_score,alta_aderencia,valor_estimado,is_link_valid,link_http_status,link_checked_at,source_system,source_priority,score_esa,ia_relevance_status,pdf_text_length,pdf_terms_found";
 
   const basicSelect =
-    "id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,source_url,pncp_id,modality";
+    "id,title,description,published_date,closing_date,status,is_favorite,is_rejected,organization_name,municipio_orgao,orgao_cnpj,edital_ano,edital_sequencial,source_url,pncp_id,modality,is_link_valid";
 
   const extended = await supabase.from("bids").select(extendedSelect).order("published_date", { ascending: false }).limit(150);
 
@@ -49,9 +49,20 @@ export async function getAllBids() {
   return (basic.data || []).map((item) => ({
     ...item,
     orgao_nome: item.organization_name,
+    municipio_orgao: item.municipio_orgao || null,
+    orgao_cnpj: item.orgao_cnpj || null,
+    edital_ano: item.edital_ano || null,
+    edital_sequencial: item.edital_sequencial || null,
     aderencia_score: null,
     alta_aderencia: null,
-    valor_estimado: null
+    valor_estimado: null,
+    is_link_valid: item.is_link_valid ?? null,
+    source_system: null,
+    source_priority: null,
+    score_esa: null,
+    ia_relevance_status: null,
+    pdf_text_length: null,
+    pdf_terms_found: []
   }));
 }
 

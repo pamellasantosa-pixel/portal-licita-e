@@ -1,3 +1,6 @@
+import { fetchComprasGovOpenBidsByKeywords } from "./_shared/compras-api-service.js";
+import { validateDocumentLink } from "./_shared/link-validation.js";
+
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 
 const FEDERAL_PRIORITY_ORGS = ["INCRA", "FUNAI", "IBAMA", "ICMBio", "MMA"];
@@ -133,6 +136,56 @@ function buildPncpSearchUrl(orgaoCnpj, organizationName) {
   return "https://pncp.gov.br/app/editais?pagina=1";
 }
 
+function normalizeYear(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length === 4 ? digits : "";
+}
+
+function normalizeSequential(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const asNumber = Number(digits);
+  if (!Number.isFinite(asNumber)) return digits;
+  return String(asNumber);
+}
+
+function parseDirectIdentifiers(item = {}, sourcePath = "") {
+  const pathMatch = String(sourcePath || "").match(/^\/compras\/(\d{14})\/(\d{4})\/(\d+)/i);
+  if (pathMatch) {
+    return {
+      cnpj: pathMatch[1],
+      ano: normalizeYear(pathMatch[2]),
+      sequencial: normalizeSequential(pathMatch[3])
+    };
+  }
+
+  const control = String(item.numero_controle_pncp || item.numeroControlePNCP || "");
+  const slashPattern = control.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
+  if (slashPattern) {
+    return {
+      cnpj: slashPattern[1],
+      ano: normalizeYear(slashPattern[4]),
+      sequencial: normalizeSequential(slashPattern[3])
+    };
+  }
+
+  return {
+    cnpj: "",
+    ano: normalizeYear(item.anoCompra || item.ano || item.anoCompraPncp),
+    sequencial: normalizeSequential(item.numero_sequencial || item.sequencialCompra || item.numero)
+  };
+}
+
+function buildPncpDirectEditalUrl(cnpj, ano, sequencial) {
+  const safeCnpj = String(cnpj || "").replace(/\D/g, "");
+  const safeAno = normalizeYear(ano);
+  const safeSeq = normalizeSequential(sequencial);
+  if (safeCnpj.length === 14 && safeAno && safeSeq) {
+    return `https://pncp.gov.br/app/editais/${safeCnpj}/${safeAno}/${safeSeq}`;
+  }
+  return "";
+}
+
 function makeAbsoluteUrl(baseUrl, url) {
   if (!url) return baseUrl;
   if (/^https?:\/\//i.test(url)) return url;
@@ -205,26 +258,32 @@ async function fetchPncpByKeywords(keywords) {
     ...(function () {
       const organizationName =
         item.orgao_nome || item.orgaoEntidade?.razaoSocial || item.unidadeOrgao?.nomeUnidade || "Orgao nao informado";
-      const cleanedCnpj = String(item.orgaoEntidade?.cnpj || item.cnpj || "").replace(/\D/g, "");
+      const sourcePath = item.item_url || item.linkSistemaOrigem || item.url || "";
+      const directIds = parseDirectIdentifiers(item, sourcePath);
+      const cleanedCnpj = String(directIds.cnpj || item.orgaoEntidade?.cnpj || item.cnpj || "").replace(/\D/g, "");
       const validCnpj = cleanedCnpj.length === 14 ? cleanedCnpj : null;
       const fallbackUrl = buildPncpSearchUrl(validCnpj, organizationName);
-      const deepLink = item.item_url
-        ? `https://pncp.gov.br/app/contratacoes${String(item.item_url).replace(/^\/compras/, "")}`
-        : fallbackUrl;
+      const deepLink = buildPncpDirectEditalUrl(validCnpj, directIds.ano, directIds.sequencial) || fallbackUrl;
       return {
         organizationName,
         validCnpj,
-        resolvedUrl: deepLink
+        resolvedUrl: deepLink,
+        ano: directIds.ano || null,
+        sequencial: directIds.sequencial || null
       };
     })(),
     source: "PNCP",
+    source_system: "PNCP",
+    source_priority: 2,
     title: item.title || item.objetoCompra || item.objeto || "Sem titulo",
     description: item.description || item.descricao || item.objetoCompra || item.objeto || "",
     organization: organizationName,
     orgao_cnpj: validCnpj,
+    edital_ano: ano,
+    edital_sequencial: sequencial,
     published_date: item.data_publicacao_pncp || item.dataPublicacao || null,
     url: resolvedUrl
-  })).map(({ organizationName, validCnpj, resolvedUrl, ...rest }) => rest);
+  })).map(({ organizationName, validCnpj, resolvedUrl, ano, sequencial, ...rest }) => rest);
 }
 
 function normalizeApiItems(payload) {
@@ -393,8 +452,6 @@ function consolidateRows(rows, keywords) {
     seen.add(identity);
 
     const text = `${row.title} ${row.description || ""} ${row.organization || ""}`;
-    if (!isPriorityFederalOrg(row.organization || "")) continue;
-
     const esa = scoreESA(text, { organization: row.organization || "" });
     if (esa.hidden) continue;
 
@@ -402,6 +459,8 @@ function consolidateRows(rows, keywords) {
 
     consolidated.push({
       ...row,
+      source_system: row.source_system || (String(row.source || "").toLowerCase().includes("compras.gov") ? "COMPRAS_GOV" : "PNCP"),
+      source_priority: Number(row.source_priority || (String(row.source || "").toLowerCase().includes("compras.gov") ? 1 : 2)),
       orgao_cnpj: String(row.orgao_cnpj || "").replace(/\D/g, "") || null,
       esa_score: Math.min(10, esa.score + keywordHits * 2),
       matched_signals: esa.matched,
@@ -409,7 +468,27 @@ function consolidateRows(rows, keywords) {
     });
   }
 
-  return consolidated.sort((a, b) => b.esa_score - a.esa_score);
+  return consolidated.sort((a, b) => {
+    const priorityDiff = (a.source_priority || 99) - (b.source_priority || 99);
+    if (priorityDiff !== 0) return priorityDiff;
+    return b.esa_score - a.esa_score;
+  });
+}
+
+async function attachLinkValidation(rows) {
+  const checked = await Promise.all(
+    rows.map(async (row) => {
+      const result = await validateDocumentLink(row.url, { timeoutMs: 8000 });
+      return {
+        ...row,
+        is_link_valid: result.isValid,
+        link_http_status: result.statusCode || null,
+        link_validation_error: result.error || null
+      };
+    })
+  );
+
+  return checked;
 }
 
 export default async function handler(req, res) {
@@ -434,18 +513,31 @@ export default async function handler(req, res) {
       return [];
     });
 
-    const comprasGovRows = await fetchComprasGovFederal(keywords, warnings).catch(() => {
-      warnings.push("Compras.gov.br indisponivel para scraping/API no momento");
+    const comprasGovRows = await fetchComprasGovOpenBidsByKeywords(keywords, { pageSize: 40 }).catch(() => {
+      warnings.push("Compras.gov.br indisponivel para API oficial no momento");
       return [];
     });
 
-    const consolidated = consolidateRows([...pncpRows, ...comprasGovRows], keywords);
+    const comprasMapped = comprasGovRows.map((row) => ({
+      source: row.source,
+      source_system: row.source_system || "COMPRAS_GOV",
+      source_priority: 1,
+      title: row.title,
+      description: row.description,
+      organization: row.organization,
+      orgao_cnpj: row.orgao_cnpj,
+      published_date: row.published_date,
+      url: row.url
+    }));
+
+    const consolidated = consolidateRows([...comprasMapped, ...pncpRows], keywords);
+    const validated = await attachLinkValidation(consolidated);
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     return res.status(200).json({
-      count: consolidated.length,
+      count: validated.length,
       warnings,
-      data: consolidated
+      data: validated
     });
   } catch (error) {
     res.setHeader("Access-Control-Allow-Origin", "*");

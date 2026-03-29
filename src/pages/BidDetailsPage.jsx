@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { analyzeBidWithGemini } from "../services/geminiService";
 import { getBidById, updateBidStatus } from "../services/bidsService";
 import MainNav from "../components/MainNav";
-import { cleanOrganName, evaluateEsaScore, extractScoreSearchTerm, sanitizeOrgNameForPncpSearch } from "../lib/esaScoring";
+import { buildPncpDirectUrl, buildPncpSearchUrlByCnpj, cleanOrganName, evaluateEsaScore, extractScoreSearchTerm, hasPncpDirectIdentifiers, sanitizeOrgNameForPncpSearch } from "../lib/esaScoring";
 import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
@@ -84,15 +84,20 @@ function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluati
     return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(specialFallback)}`;
   }
 
-  const combined = [orgTerm, scoreTerm, "edital"].filter(Boolean).join(" ").trim();
-  if (!combined) return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
-  return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(combined)}`;
+  return buildPncpSearchUrlByCnpj("", orgTerm, scoreTerm);
 }
 
 function generatePNCPUrl(bid, esaRealtime = null) {
   const scoreReason = esaRealtime?.reason || "sem_termo";
   const scoreEvaluation = esaRealtime?.evaluation || {};
-  return buildPncpUrlByOrgName(bid?.organization_name || bid?.orgao_nome, scoreReason, scoreEvaluation);
+  const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || "").trim();
+  return buildPncpDirectUrl({
+    orgaoCnpj: bid?.orgao_cnpj,
+    ano: bid?.edital_ano,
+    sequencial: bid?.edital_sequencial,
+    pncpId: bid?.pncp_id,
+    fallbackUrl: buildPncpSearchUrlByCnpj(bid?.orgao_cnpj, bid?.organization_name || bid?.orgao_nome, scoreTerm)
+  });
 }
 
 function isComprasGovFederalBid(bid) {
@@ -180,6 +185,12 @@ export default function BidDetailsPage() {
 
   // Botao principal abre busca pre-preenchida por orgao_cnpj.
   const portalUrl = buildPortalUrl(bid, esaRealtime);
+  const hasDirectLink = hasPncpDirectIdentifiers({
+    orgaoCnpj: bid?.orgao_cnpj,
+    ano: bid?.edital_ano,
+    sequencial: bid?.edital_sequencial,
+    pncpId: bid?.pncp_id
+  });
 
   // Para visualização/iframe, só usamos URL quando for PDF.
   const editalUrl = resolvePublicNoticeUrl(bid, esaRealtime);
@@ -259,8 +270,15 @@ export default function BidDetailsPage() {
       setAnalysisRaw(raw);
 
       try {
+        const parsed = parseAnalysisJson(raw);
         await updateBidStatus(bid.id, {
           ia_analysis_summary: raw,
+          ia_is_viable: parsed?.is_viable ?? null,
+          ia_deliverables: parsed?.deliverables ?? null,
+          score_esa: parsed?.score_esa ?? parsed?.score ?? 0,
+          ia_relevance_status: parsed?.ia_relevance_status ?? null,
+          pdf_text_length: parsed?.pdf_meta?.text_length ?? null,
+          pdf_terms_found: parsed?.pdf_meta?.terms_found ?? [],
           status: "em_analise"
         });
       } catch (saveErr) {
@@ -334,6 +352,16 @@ export default function BidDetailsPage() {
               Score ESA (tempo real): {esaRealtime.score}
             </span>
             <ScoreReasonBadge reason={esaRealtime.reason} evaluation={esaRealtime.evaluation} />
+            {bid.is_link_valid === true && (
+              <span className="rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Documento Validado
+              </span>
+            )}
+            {bid.is_link_valid === false && (
+              <span className="rounded-full border border-red-300 bg-red-50 px-3 py-1 font-body text-xs font-semibold uppercase tracking-wide text-red-700">
+                Link do documento indisponivel
+              </span>
+            )}
             {esaRealtime.matched.length > 0 && (
               <span className="rounded-full bg-brand-sand px-3 py-1 font-body text-xs font-semibold text-brand-brown">
                 Sinais: {esaRealtime.matched.join(", ")}
@@ -377,6 +405,12 @@ export default function BidDetailsPage() {
               Rejeitar
             </button>
           </div>
+
+          {!hasDirectLink && (
+            <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-body text-sm text-amber-800">
+              Este edital ainda nao possui CNPJ/ano/sequencial completos para link direto; o botao usa fallback de busca PNCP.
+            </p>
+          )}
 
           {error && <p className="mt-4 font-body text-sm text-red-700">{error}</p>}
         </section>
@@ -433,6 +467,11 @@ export default function BidDetailsPage() {
 
               <div className="rounded-xl border border-brand-brown/10 bg-brand-sand/35 p-4">
                 <p className="font-body text-sm text-brand-ink/90">{analysis.justification || "Sem justificativa."}</p>
+                {analysis.ia_relevance_status === "irrelevante" && (
+                  <p className="mt-2 font-body text-sm font-semibold text-red-700">
+                    Analise irrelevante por trava de seguranca de PDF real.
+                  </p>
+                )}
               </div>
 
               {analysis.objeto_esa_resumo && (

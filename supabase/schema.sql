@@ -33,12 +33,25 @@ create table if not exists public.bids (
 
 -- Compatibilidade para cenarios em que o projeto esteja esperando colunas no padrao ESA.
 alter table public.bids add column if not exists orgao_nome text;
+alter table public.bids add column if not exists municipio_orgao text;
 alter table public.bids add column if not exists orgao_cnpj text;
+alter table public.bids add column if not exists edital_ano text;
+alter table public.bids add column if not exists edital_sequencial text;
 alter table public.bids add column if not exists objeto_descricao text;
 alter table public.bids add column if not exists valor_estimado numeric;
 alter table public.bids add column if not exists data_abertura timestamptz;
 alter table public.bids add column if not exists cnae_principal text;
 alter table public.bids add column if not exists link_edital text;
+alter table public.bids add column if not exists is_link_valid boolean;
+alter table public.bids add column if not exists link_http_status integer;
+alter table public.bids add column if not exists link_validation_error text;
+alter table public.bids add column if not exists link_checked_at timestamptz;
+alter table public.bids add column if not exists source_system text;
+alter table public.bids add column if not exists source_priority integer;
+alter table public.bids add column if not exists score_esa integer;
+alter table public.bids add column if not exists ia_relevance_status text;
+alter table public.bids add column if not exists pdf_text_length integer;
+alter table public.bids add column if not exists pdf_terms_found text[];
 
 create or replace function public.get_filtered_bids(
   p_search text default null,
@@ -50,12 +63,14 @@ create or replace function public.get_filtered_bids(
 returns table (
   id uuid,
   orgao_nome text,
+  municipio_orgao text,
   objeto_descricao text,
   valor_estimado numeric,
   data_abertura timestamptz,
   cnae_principal text,
   link_edital text,
   status text,
+  is_link_valid boolean,
   alta_aderencia boolean,
   aderencia_score integer
 )
@@ -66,12 +81,14 @@ as $$
     select
       b.id,
       coalesce(b.orgao_nome, b.organization_name, '') as orgao_nome,
+      coalesce(b.municipio_orgao, '') as municipio_orgao,
       coalesce(b.objeto_descricao, b.description, b.title, '') as objeto_descricao,
       coalesce(b.valor_estimado, null) as valor_estimado,
       coalesce(b.data_abertura, b.published_date) as data_abertura,
       b.cnae_principal,
       coalesce(b.link_edital, b.source_url) as link_edital,
       b.status,
+      b.is_link_valid,
       lower(
         coalesce(b.objeto_descricao, b.description, b.title, '') || ' ' ||
         coalesce(b.orgao_nome, b.organization_name, '') || ' ' ||
@@ -115,12 +132,14 @@ as $$
   select
     s.id,
     s.orgao_nome,
+    s.municipio_orgao,
     s.objeto_descricao,
     s.valor_estimado,
     s.data_abertura,
     s.cnae_principal,
     s.link_edital,
     s.status,
+    s.is_link_valid,
     s.alta_aderencia,
     s.aderencia_score
   from scored s

@@ -4,10 +4,13 @@ import MainNav from "../components/MainNav";
 import { getActiveCnaes, getActiveKeywords } from "../services/settingsService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import {
+  buildPncpDirectUrl,
+  buildPncpSearchUrlByCnpj,
   cleanOrganName,
   evaluateEsaScore,
   extractScoreSearchTerm,
   isAbsoluteVeto,
+  hasPncpDirectIdentifiers,
   isPriorityFederalOrg,
   sanitizeOrgNameForPncpSearch,
   sanitizeCnpj
@@ -39,15 +42,17 @@ function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluati
     return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(specialFallback)}`;
   }
 
-  const combined = [orgTerm, scoreTerm, "edital"].filter(Boolean).join(" ").trim();
-  if (!combined) return "https://pncp.gov.br/app/editais?pagina=1";
-  return `https://pncp.gov.br/app/editais?q=${encodeURIComponent(combined)}`;
+  return buildPncpSearchUrlByCnpj("", orgTerm, scoreTerm);
 }
 
 function buildPncpUrlByCnpj(bid) {
-  const reason = bid?.score_reason || bid?.esa_evaluation?.reason || "sem_termo";
-  const evaluation = bid?.esa_evaluation || {};
-  return buildPncpUrlByOrgName(bid?.organization_name || bid?.orgao_nome, reason, evaluation);
+  return buildPncpDirectUrl({
+    orgaoCnpj: bid?.orgao_cnpj,
+    ano: bid?.edital_ano,
+    sequencial: bid?.edital_sequencial,
+    pncpId: bid?.pncp_id,
+    fallbackUrl: buildPncpSearchUrlByCnpj(bid?.orgao_cnpj, bid?.organization_name || bid?.orgao_nome, "")
+  });
 }
 
 function buildDetailsUrl(bid) {
@@ -140,15 +145,20 @@ export default function BidsPage() {
       if (rpcError) throw new Error(rpcError.message);
 
       const ids = (data || []).map((row) => row.id).filter(Boolean);
-      let cnpjById = {};
+      let identifiersById = {};
       if (ids.length > 0) {
         const { data: cnpjRows } = await supabase
           .from("bids")
-          .select("id,orgao_cnpj")
+          .select("id,orgao_cnpj,edital_ano,edital_sequencial,pncp_id")
           .in("id", ids);
 
-        cnpjById = (cnpjRows || []).reduce((acc, row) => {
-          acc[row.id] = sanitizeCnpj(row.orgao_cnpj);
+        identifiersById = (cnpjRows || []).reduce((acc, row) => {
+          acc[row.id] = {
+            orgao_cnpj: sanitizeCnpj(row.orgao_cnpj),
+            edital_ano: row.edital_ano || null,
+            edital_sequencial: row.edital_sequencial || null,
+            pncp_id: row.pncp_id || null
+          };
           return acc;
         }, {});
       }
@@ -168,7 +178,8 @@ export default function BidsPage() {
         ...extractMunicipioEstado(row.orgao_nome),
         id: row.id,
         rowType: "internal",
-        source: "PNCP",
+        source: row.source_system || "PNCP",
+        source_priority: Number(row.source_priority || 2),
         title: row.objeto_descricao || "Sem titulo",
         description: row.objeto_descricao || "",
         organization_name: row.orgao_nome || "Orgao nao informado",
@@ -177,7 +188,11 @@ export default function BidsPage() {
         valor_estimado: row.valor_estimado,
         status: row.status || "em_analise",
         source_url: row.link_edital,
-        orgao_cnpj: cnpjById[row.id] || "",
+        is_link_valid: row.is_link_valid ?? null,
+        orgao_cnpj: identifiersById[row.id]?.orgao_cnpj || "",
+        edital_ano: identifiersById[row.id]?.edital_ano || null,
+        edital_sequencial: identifiersById[row.id]?.edital_sequencial || null,
+        pncp_id: identifiersById[row.id]?.pncp_id || null,
         cnae_principal: row.cnae_principal || ""
       }));
 
@@ -204,6 +219,7 @@ export default function BidsPage() {
           id: row.url || `external-${index}`,
           rowType: "external",
           source: row.source || "Externa",
+          source_priority: Number(row.source_priority || 1),
           title: row.title || "Sem titulo",
           description: row.description || "",
           organization_name: row.organization || "Orgao nao informado",
@@ -212,7 +228,11 @@ export default function BidsPage() {
           valor_estimado: null,
           status: "em_analise",
           source_url: row.url,
+          is_link_valid: row.is_link_valid ?? null,
           orgao_cnpj: sanitizeCnpj(row.orgao_cnpj),
+          edital_ano: row.edital_ano || null,
+          edital_sequencial: row.edital_sequencial || null,
+          pncp_id: row.pncp_id || null,
           cnae_principal: "",
           municipio: "-",
           estado: "-"
@@ -222,10 +242,12 @@ export default function BidsPage() {
       }
 
       const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter((row) => {
-        return !isAbsoluteVeto(row.esa_evaluation);
+        return !isAbsoluteVeto(row.esa_evaluation) && row.is_link_valid !== false;
       });
 
       hiddenFiltered.sort((a, b) => {
+        const sourcePriorityDiff = (a.source_priority || 99) - (b.source_priority || 99);
+        if (sourcePriorityDiff !== 0) return sourcePriorityDiff;
         const scoreDiff = (b.esa_score || 0) - (a.esa_score || 0);
         if (scoreDiff !== 0) return scoreDiff;
         return new Date(b.published_date || 0) - new Date(a.published_date || 0);
@@ -378,6 +400,21 @@ export default function BidsPage() {
                         <span className="rounded-full border border-brand-cyan/30 bg-brand-cyan/10 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-brand-cyan">
                           Score {bid.aderencia_score}
                         </span>
+                        {bid.is_link_valid === true && (
+                          <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                            Documento Validado
+                          </span>
+                        )}
+                        {!hasPncpDirectIdentifiers({
+                          orgaoCnpj: bid.orgao_cnpj,
+                          ano: bid.edital_ano,
+                          sequencial: bid.edital_sequencial,
+                          pncpId: bid.pncp_id
+                        }) && (
+                          <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-1 font-body text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                            Link direto indisponivel
+                          </span>
+                        )}
                         <ScoreReasonBadge reason={bid.score_reason} evaluation={bid.esa_evaluation} />
                         <span className="rounded-full border border-brand-brown/20 bg-white px-2 py-1 font-body text-[11px] font-semibold text-brand-brown">
                           Municipio: {bid.municipio}

@@ -26,6 +26,56 @@ function extractOrgaoCnpj(item = {}, sourcePath = "") {
   return null;
 }
 
+function normalizeYear(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length === 4 ? digits : "";
+}
+
+function normalizeSequential(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const asNumber = Number(digits);
+  if (!Number.isFinite(asNumber)) return digits;
+  return String(asNumber);
+}
+
+function parseDirectIdentifiers(item = {}, sourcePath = "") {
+  const pathMatch = String(sourcePath || "").match(/^\/compras\/(\d{14})\/(\d{4})\/(\d+)/i);
+  if (pathMatch) {
+    return {
+      cnpj: pathMatch[1],
+      ano: normalizeYear(pathMatch[2]),
+      sequencial: normalizeSequential(pathMatch[3])
+    };
+  }
+
+  const control = String(item.numero_controle_pncp || item.numeroControlePNCP || "");
+  const slashPattern = control.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
+  if (slashPattern) {
+    return {
+      cnpj: slashPattern[1],
+      ano: normalizeYear(slashPattern[4]),
+      sequencial: normalizeSequential(slashPattern[3])
+    };
+  }
+
+  return {
+    cnpj: "",
+    ano: normalizeYear(item.anoCompra || item.ano || item.anoCompraPncp),
+    sequencial: normalizeSequential(item.numero_sequencial || item.sequencialCompra || item.numero)
+  };
+}
+
+function buildPncpDirectEditalUrl(cnpj, ano, sequencial) {
+  const safeCnpj = onlyDigits(cnpj);
+  const safeAno = normalizeYear(ano);
+  const safeSeq = normalizeSequential(sequencial);
+  if (safeCnpj.length === 14 && safeAno && safeSeq) {
+    return `${PNCP_BASE_URL}/app/editais/${safeCnpj}/${safeAno}/${safeSeq}`;
+  }
+  return "";
+}
+
 function normalizePayload(payload) {
   if (Array.isArray(payload?.items)) return payload.items;
   if (Array.isArray(payload)) return payload;
@@ -54,16 +104,19 @@ function normalizePncpItem(item) {
 
   const sourcePath = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
   const orgaoCnpj = extractOrgaoCnpj(item, sourcePath);
+  const directIds = parseDirectIdentifiers(item, sourcePath);
+  const directCnpj = directIds.cnpj || orgaoCnpj || "";
+  const directUrl = buildPncpDirectEditalUrl(directCnpj, directIds.ano, directIds.sequencial);
   const normalizedPath =
     sourcePath && sourcePath.startsWith("/compras/")
       ? `/app/contratacoes${sourcePath.replace(/^\/compras/, "")}`
       : sourcePath;
 
-  const sourceUrl = normalizedPath
+  const sourceUrl = directUrl || (normalizedPath
     ? normalizedPath.startsWith("http")
       ? normalizedPath
       : `${PNCP_BASE_URL}${normalizedPath}`
-    : buildPncpSearchFallbackUrl(orgaoCnpj, organizationName);
+    : buildPncpSearchFallbackUrl(orgaoCnpj, organizationName));
 
   const publishedDate =
     item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || item.createdAt || new Date().toISOString();
@@ -76,6 +129,8 @@ function normalizePncpItem(item) {
     description,
     organization_name: organizationName,
     orgao_cnpj: orgaoCnpj,
+    edital_ano: directIds.ano || null,
+    edital_sequencial: directIds.sequencial || null,
     source_url: sourceUrl,
     pncp_id: String(pncpControl || sequence || ""),
     modality: item.modalidade_licitacao_nome || item.modalidadeNome || item.modalidade || null,
@@ -84,6 +139,13 @@ function normalizePncpItem(item) {
     source: "PNCP",
     status: "em_analise"
   };
+}
+
+async function updateBid(supabase, bidId, patch) {
+  const result = await supabase.from("bids").update(patch).eq("id", bidId);
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
 }
 
 async function fetchByPncpId(pncpId) {
@@ -127,21 +189,18 @@ export default async function handler(req, res) {
 
     const normalized = normalizePncpItem(rawItem);
 
-    const { error } = await supabase
-      .from("bids")
-      .update({
-        title: normalized.title,
-        description: normalized.description,
-        organization_name: normalized.organization_name,
-        orgao_cnpj: normalized.orgao_cnpj,
-        source_url: normalized.source_url,
-        modality: normalized.modality,
-        published_date: normalized.published_date,
-        closing_date: normalized.closing_date
-      })
-      .eq("id", bidId);
-
-    if (error) throw new Error(error.message);
+    await updateBid(supabase, bidId, {
+      title: normalized.title,
+      description: normalized.description,
+      organization_name: normalized.organization_name,
+      orgao_cnpj: normalized.orgao_cnpj,
+      edital_ano: normalized.edital_ano,
+      edital_sequencial: normalized.edital_sequencial,
+      source_url: normalized.source_url,
+      modality: normalized.modality,
+      published_date: normalized.published_date,
+      closing_date: normalized.closing_date
+    });
 
     return res.status(200).json({ updated: true, bid: normalized });
   } catch (err) {

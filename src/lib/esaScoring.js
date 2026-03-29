@@ -19,6 +19,18 @@ const ESA_EXCLUSION_TERMS = [
 ];
 
 const FEDERAL_PRIORITY_ORGS = ["incra", "funai", "ibama", "icmbio", "mma"];
+const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
+
+const PDF_ADHERENCE_TERMS = [
+  "quilombola",
+  "diagnostico",
+  "socioambiental",
+  "licenciamento",
+  "clpi",
+  "consulta previa",
+  "indigena",
+  "convencao 169"
+];
 
 const BRAZIL_STATE_NAMES = [
   "ACRE",
@@ -140,6 +152,115 @@ export function sanitizeOrgNameForPncpSearch(value) {
     .trim();
 
   return text;
+}
+
+export function buildPncpSearchUrlByCnpj(orgaoCnpj, organizationName = "", scoreTerm = "") {
+  const cnpj = sanitizeCnpj(orgaoCnpj);
+  const term = String(scoreTerm || "").trim();
+  if (cnpj) {
+    const query = [cnpj, term].filter(Boolean).join(" ").trim();
+    return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(query)}`;
+  }
+
+  const cleanOrg = sanitizeOrgNameForPncpSearch(cleanOrganName(organizationName));
+  const fallbackQuery = [cleanOrg, term, "edital"].filter(Boolean).join(" ").trim();
+  if (!fallbackQuery) return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
+  return `${PNCP_EDITAIS_BASE_URL}?q=${encodeURIComponent(fallbackQuery)}`;
+}
+
+function normalizeYear(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 4) return digits;
+  return "";
+}
+
+function normalizeSequential(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  const asNumber = Number(digits);
+  if (!Number.isFinite(asNumber)) return digits;
+  return String(asNumber);
+}
+
+function parsePncpIdIdentifiers(pncpId) {
+  const raw = String(pncpId || "").trim();
+  if (!raw) return { cnpj: "", ano: "", sequencial: "" };
+
+  const slashPattern = raw.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
+  if (slashPattern) {
+    return {
+      cnpj: sanitizeCnpj(slashPattern[1]),
+      ano: normalizeYear(slashPattern[4]),
+      sequencial: normalizeSequential(slashPattern[3])
+    };
+  }
+
+  const canonicalPattern = raw.match(/^(\d{14})-(\d{4})-(\d+)$/);
+  if (canonicalPattern) {
+    return {
+      cnpj: sanitizeCnpj(canonicalPattern[1]),
+      ano: normalizeYear(canonicalPattern[2]),
+      sequencial: normalizeSequential(canonicalPattern[3])
+    };
+  }
+
+  return { cnpj: "", ano: "", sequencial: "" };
+}
+
+export function hasPncpDirectIdentifiers({ orgaoCnpj, ano, sequencial, pncpId } = {}) {
+  const fromPncpId = parsePncpIdIdentifiers(pncpId);
+  const cnpj = sanitizeCnpj(orgaoCnpj) || fromPncpId.cnpj;
+  const safeYear = normalizeYear(ano) || fromPncpId.ano;
+  const safeSequential = normalizeSequential(sequencial) || fromPncpId.sequencial;
+  return Boolean(cnpj && safeYear && safeSequential);
+}
+
+export function buildPncpDirectUrl({ orgaoCnpj, ano, sequencial, pncpId, fallbackUrl } = {}) {
+  const fromPncpId = parsePncpIdIdentifiers(pncpId);
+  const cnpj = sanitizeCnpj(orgaoCnpj) || fromPncpId.cnpj;
+  const safeYear = normalizeYear(ano) || fromPncpId.ano;
+  const safeSequential = normalizeSequential(sequencial) || fromPncpId.sequencial;
+
+  if (cnpj && safeYear && safeSequential) {
+    return `${PNCP_EDITAIS_BASE_URL}/${cnpj}/${safeYear}/${safeSequential}`;
+  }
+
+  const safeFallback = String(fallbackUrl || "").trim();
+  if (safeFallback) return safeFallback;
+  return `${PNCP_EDITAIS_BASE_URL}?pagina=1`;
+}
+
+export function evaluatePdfTextRelevanceGate(pdfText) {
+  const normalized = normalizeText(pdfText || "");
+  if (!normalized.trim()) {
+    return {
+      isRelevant: false,
+      score: 0,
+      matchedTerms: [],
+      status: "irrelevante",
+      reason: "Texto do PDF vazio"
+    };
+  }
+
+  const matchedTerms = PDF_ADHERENCE_TERMS.filter((term) => normalized.includes(normalizeText(term)));
+
+  if (matchedTerms.length < 2) {
+    return {
+      isRelevant: false,
+      score: 0,
+      matchedTerms,
+      status: "irrelevante",
+      reason: "Menos de 2 termos de aderencia no PDF"
+    };
+  }
+
+  return {
+    isRelevant: true,
+    score: Math.min(10, matchedTerms.length + 3),
+    matchedTerms,
+    status: "relevante",
+    reason: "PDF com aderencia minima confirmada"
+  };
 }
 
 export function evaluateEsaScore(text, context = {}) {

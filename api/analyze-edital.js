@@ -8,6 +8,8 @@
   REQUIRED_TERMS,
   TARGET_ORGS
 } from "./_shared/filters.js";
+import { extractPdfTextFromUrl } from "./_shared/pdf-content-service.js";
+import { evaluatePdfTextRelevanceGate } from "../src/lib/esaScoring.js";
 
 function normalizeText(value) {
   return String(value || "")
@@ -109,8 +111,56 @@ export default async function handler(req, res) {
   }
 
   const { pdfUrl, bidTitle, description, organizationName, modality, pncpId, guidelines } = req.body || {};
+
+  const pdfExtraction = await extractPdfTextFromUrl(pdfUrl, { timeoutMs: 25000 });
+  const pdfText = pdfExtraction.ok ? String(pdfExtraction.text || "") : "";
+  const relevanceGate = evaluatePdfTextRelevanceGate(pdfText);
+
+  if (!pdfExtraction.ok || !relevanceGate.isRelevant) {
+    const summary = {
+      method: "analise_pdf_real",
+      guidelines: guidelines || "Diretrizes ESA padrao",
+      source_reference: pdfUrl || "https://pncp.gov.br/app/editais?pagina=1",
+      is_viable: false,
+      score: 0,
+      score_esa: 0,
+      confidence: 95,
+      ia_relevance_status: "irrelevante",
+      relevance_reason: !pdfExtraction.ok ? `Falha ao processar PDF: ${pdfExtraction.error}` : relevanceGate.reason,
+      keywords_encontradas: relevanceGate.matchedTerms || [],
+      sinais_positivos: [],
+      sinais_de_atencao: ["Analise bloqueada por trava de seguranca de relevancia"],
+      score_breakdown: {
+        keywordHits: 0,
+        nicheHits: 0,
+        projectHits: 0,
+        requiredHits: 0,
+        cnaeHits: 0,
+        orgHits: 0,
+        territoryHits: 0,
+        exclusionHits: 0
+      },
+      objeto_esa_resumo: {
+        comunidade_afetada: ["Irrelevante"],
+        entregaveis_tecnicos: ["Nao inferido"],
+        sintese: "Analise nao executada: texto PDF ausente ou sem aderencia minima confirmada."
+      },
+      justification: "Bloqueado pela trava de seguranca: sem texto PDF valido com no minimo 2 termos de aderencia.",
+      deliverables: [],
+      pdf_meta: {
+        ok: pdfExtraction.ok,
+        error: pdfExtraction.error || null,
+        pages: pdfExtraction.pages || 0,
+        text_length: pdfText.length,
+        terms_found: relevanceGate.matchedTerms || []
+      }
+    };
+
+    return res.status(200).json({ raw: JSON.stringify(summary, null, 2) });
+  }
+
   const normalized = normalizeText(
-    `${bidTitle || ""} ${description || ""} ${organizationName || ""} ${modality || ""} ${pncpId || ""} ${pdfUrl || ""}`
+    `${bidTitle || ""} ${description || ""} ${organizationName || ""} ${modality || ""} ${pncpId || ""} ${pdfText || ""}`
       .replace(/\s+/g, " ")
       .trim()
   );
@@ -144,12 +194,15 @@ export default async function handler(req, res) {
   ];
 
   const summary = {
-    method: "analise_heuristica_gratuita",
+    method: "analise_pdf_real",
     guidelines: guidelines || "Diretrizes ESA padrao",
     source_reference: pdfUrl || "https://pncp.gov.br/app/editais?pagina=1",
     is_viable: isViable,
     score,
+    score_esa: score,
     confidence,
+    ia_relevance_status: "relevante",
+    relevance_reason: relevanceGate.reason,
     keywords_encontradas: keywordsEncontradas,
     sinais_positivos: sinaisPositivos,
     sinais_de_atencao: sinaisAtencao,
@@ -171,7 +224,14 @@ export default async function handler(req, res) {
     justification: isViable
       ? "Ha sinais consistentes de aderencia ao perfil socioambiental com base na mesma regua de captura usada na listagem."
       : "Aderencia baixa pela regua de captura/analise atual. Vale abrir o edital no PNCP e validar objeto e entregas antes de descartar.",
-    deliverables
+    deliverables,
+    pdf_meta: {
+      ok: true,
+      error: null,
+      pages: pdfExtraction.pages || 0,
+      text_length: pdfText.length,
+      terms_found: relevanceGate.matchedTerms || []
+    }
   };
 
   return res.status(200).json({ raw: JSON.stringify(summary, null, 2) });
