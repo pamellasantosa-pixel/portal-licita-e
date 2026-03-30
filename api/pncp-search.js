@@ -11,6 +11,7 @@ import {
   REQUIRED_TERMS,
   TARGET_ORGS
 } from "./_shared/filters.js";
+import { fetchComprasGovOpenBidsByKeywords } from "./_shared/compras-api-service.js";
 import { validateDocumentLink } from "./_shared/link-validation.js";
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
@@ -747,8 +748,23 @@ async function fetchPncpSource({ searchTerms, targetYear, requestKeywords }) {
 
 async function fetchComprasGovSource({ searchTerms }) {
   try {
+    const comprasApiRows = await fetchComprasGovOpenBidsByKeywords(searchTerms, {
+      timeoutMs: 12000,
+      pageSize: 80
+    }).catch(() => []);
+
+    if (comprasApiRows.length > 0) {
+      const items = comprasApiRows.map((row) => ({ bid: normalizeComprasRow(row), raw: row }));
+      return {
+        source: "ComprasGov",
+        warnings: [],
+        rawCount: comprasApiRows.length,
+        items
+      };
+    }
+
     let rawRows = [];
-    let lastError = "";
+    let lastError = "compras_api_sem_resultado";
 
     for (const url of COMPRAS_DADOS_GOV_URLS) {
       try {
@@ -782,18 +798,23 @@ async function fetchComprasGovSource({ searchTerms }) {
       throw new Error(lastError);
     }
 
-    const focusRegex = new RegExp(COMPRAS_FOCUS_TERMS.map((term) => normalizeText(term)).join("|"), "i");
-
     const filteredRows = rawRows.filter((row) => {
-      const objeto = normalizeText(row?.objeto || "");
-      if (!objeto) return false;
-      return focusRegex.test(objeto);
+      const text = normalizeText(`${row?.objeto || ""} ${row?.descricao || ""} ${row?.titulo || ""} ${row?.title || ""}`);
+      if (!text) return false;
+
+      const hasFocused = COMPRAS_FOCUS_TERMS.some((term) => text.includes(normalizeText(term)));
+      const hasKeyword = searchTerms.some((term) => containsExactKeyword(text, term));
+      return hasFocused || hasKeyword;
     });
 
-    const items = filteredRows.map((row) => ({ bid: normalizeComprasRow(row), raw: row }));
+    const rowsForNormalization = filteredRows.length > 0 ? filteredRows : rawRows.slice(0, 40);
+    const items = rowsForNormalization.map((row) => ({ bid: normalizeComprasRow(row), raw: row }));
     return {
       source: "ComprasGov",
-      warnings: [],
+      warnings:
+        filteredRows.length === 0 && rawRows.length > 0
+          ? ["Compras.gov sem match forte por palavra-chave; usando amostra ampla para nao perder cobertura"]
+          : [],
       rawCount: rawRows.length,
       items
     };

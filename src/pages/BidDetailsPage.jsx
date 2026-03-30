@@ -71,6 +71,51 @@ function parsePncpControl(value) {
   return null;
 }
 
+function parseDirectIdentifiersFromUrl(url) {
+  const raw = decodeRepeated(url);
+  if (!raw) return null;
+
+  const direct = raw.match(/\/(?:editais|contratacoes|compras)\/(\d{14})\/(\d{4})\/(\d+)/i);
+  if (!direct) return null;
+
+  return {
+    cnpj: direct[1],
+    ano: direct[2],
+    numero: String(Number(direct[3]))
+  };
+}
+
+function resolvePncpIdentifiers(bid) {
+  const fromControl = parsePncpControl(bid?.pncp_id || "");
+  const fromSourceUrl = parseDirectIdentifiersFromUrl(bid?.source_url || "");
+
+  return {
+    orgaoCnpj: bid?.orgao_cnpj || fromControl?.cnpj || fromSourceUrl?.cnpj || "",
+    ano: bid?.edital_ano || fromControl?.ano || fromSourceUrl?.ano || "",
+    sequencial: bid?.edital_sequencial || fromControl?.numero || fromSourceUrl?.numero || ""
+  };
+}
+
+function extractTitleSearchTerm(title) {
+  const tokens = String(title || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4)
+    .filter((token) => !["edital", "prefeitura", "municipal", "contratacao", "licitacao"].includes(token));
+
+  return tokens.slice(0, 3).join(" ");
+}
+
+function isPncpOriginBid(bid) {
+  const sourceSystem = String(bid?.source_system || "").toLowerCase();
+  const sourceOrigin = String(bid?.portal_origin || bid?.source || "").toLowerCase();
+  const sourceUrl = String(bid?.source_url || "").toLowerCase();
+  return sourceSystem.includes("pncp") || sourceOrigin.includes("pncp") || sourceUrl.includes("pncp.gov.br");
+}
+
 function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluation = {}) {
   const orgTerm = sanitizeOrgNameForPncpSearch(cleanOrganName(orgName));
   const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || "")
@@ -88,13 +133,14 @@ function buildPncpUrlByOrgName(orgName, scoreReason = "sem_termo", scoreEvaluati
 }
 
 function generatePNCPUrl(bid, esaRealtime = null) {
+  const ids = resolvePncpIdentifiers(bid);
   const scoreReason = esaRealtime?.reason || "sem_termo";
   const scoreEvaluation = esaRealtime?.evaluation || {};
-  const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || "").trim();
+  const scoreTerm = String(extractScoreSearchTerm(scoreReason, scoreEvaluation) || extractTitleSearchTerm(bid?.title) || "").trim();
   return buildPncpDirectUrl({
-    orgaoCnpj: bid?.orgao_cnpj,
-    ano: bid?.edital_ano,
-    sequencial: bid?.edital_sequencial,
+    orgaoCnpj: ids.orgaoCnpj,
+    ano: ids.ano,
+    sequencial: ids.sequencial,
     pncpId: bid?.pncp_id,
     fallbackUrl: buildPncpSearchUrlByCnpj(bid?.orgao_cnpj, bid?.organization_name || bid?.orgao_nome, scoreTerm)
   });
@@ -122,6 +168,10 @@ function buildPncpCnpjFallbackUrl(bid, esaRealtime = null) {
 }
 
 function buildPortalUrl(bid, esaRealtime = null) {
+  const sourceUrl = toHttpsUrl(decodeRepeated(bid?.source_url || ""));
+  if (!isPncpOriginBid(bid) && sourceUrl) {
+    return sourceUrl;
+  }
   return generatePNCPUrl(bid, esaRealtime);
 }
 
@@ -185,10 +235,11 @@ export default function BidDetailsPage() {
 
   // Botao principal abre busca pre-preenchida por orgao_cnpj.
   const portalUrl = buildPortalUrl(bid, esaRealtime);
+  const resolvedIds = resolvePncpIdentifiers(bid);
   const hasDirectLink = hasPncpDirectIdentifiers({
-    orgaoCnpj: bid?.orgao_cnpj,
-    ano: bid?.edital_ano,
-    sequencial: bid?.edital_sequencial,
+    orgaoCnpj: resolvedIds.orgaoCnpj,
+    ano: resolvedIds.ano,
+    sequencial: resolvedIds.sequencial,
     pncpId: bid?.pncp_id
   });
 
@@ -376,7 +427,7 @@ export default function BidDetailsPage() {
               rel="noreferrer"
               className="rounded-xl border border-brand-brown/20 bg-white px-4 py-2 font-heading text-xs font-semibold uppercase tracking-wider text-brand-brown"
             >
-              Ver no PNCP
+              {isPncpOriginBid(bid) ? "Ver no PNCP" : "Abrir Origem"}
             </a>
             <button
               onClick={() => handleAnalyze(false)}
@@ -406,7 +457,7 @@ export default function BidDetailsPage() {
             </button>
           </div>
 
-          {!hasDirectLink && (
+          {isPncpOriginBid(bid) && !hasDirectLink && (
             <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 font-body text-sm text-amber-800">
               Este edital ainda nao possui CNPJ/ano/sequencial completos para link direto; o botao usa fallback de busca PNCP.
             </p>
