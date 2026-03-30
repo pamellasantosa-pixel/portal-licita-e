@@ -26,21 +26,38 @@ export async function getTodayBids() {
 export async function getRelevantBids() {
   const supabase = getSupabaseClientOrThrow();
 
-  const selectFields =
+  const extendedSelectFields =
     "id,title,description,published_date,status,is_favorite,is_rejected,organization_name,orgao_nome,orgao_cnpj,source_url,aderencia_score,alta_aderencia";
 
-  const { data, error } = await supabase
+  const extended = await supabase
     .from("bids")
-    .select(selectFields)
+    .select(extendedSelectFields)
     .gt("aderencia_score", 0)
     .order("published_date", { ascending: false })
     .limit(300);
 
-  if (error) {
-    throw new Error(`Erro ao carregar bids relevantes: ${error.message}`);
+  if (!extended.error) {
+    return extended.data ?? [];
   }
 
-  return data ?? [];
+  const basicSelectFields =
+    "id,title,description,published_date,status,is_favorite,is_rejected,organization_name,orgao_nome,orgao_cnpj,source_url";
+
+  const basic = await supabase
+    .from("bids")
+    .select(basicSelectFields)
+    .order("published_date", { ascending: false })
+    .limit(300);
+
+  if (basic.error) {
+    throw new Error(`Erro ao carregar bids relevantes: ${basic.error.message}`);
+  }
+
+  return (basic.data ?? []).map((item) => ({
+    ...item,
+    aderencia_score: null,
+    alta_aderencia: null
+  }));
 }
 
 export async function getAllBids() {
