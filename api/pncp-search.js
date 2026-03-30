@@ -11,11 +11,12 @@ import {
   REQUIRED_TERMS,
   TARGET_ORGS
 } from "./_shared/filters.js";
-import { fetchComprasGovOpenBidsByKeywords } from "./_shared/compras-api-service.js";
 import { validateDocumentLink } from "./_shared/link-validation.js";
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
+const COMPRAS_DADOS_GOV_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?item_material_servico=servico&situacao=aberta";
+const DEFAULT_SYNC_YEAR = "2026";
 const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
 const RECEIVING_PROPOSALS_STATUSES = ["recebendo_proposta", "recebendo propostas", "recebendo proposta", "1"];
 
@@ -29,6 +30,8 @@ const ESA_PRIORITY_RULES = [
 ];
 
 const NEGATIVE_HIDE_TERMS = ["aquisicao de materiais", "obras de pavimentacao", "brinquedos", "generos alimenticios"];
+const EXSA_FOCUS_TERMS = ["socioambiental", "quilombola", "indigena", "participativo", "diagnostico"];
+const COMPRAS_FOCUS_TERMS = ["socioambiental", "diagnostico"];
 
 function isEmailLike(value = "") {
   const text = String(value || "").trim();
@@ -49,6 +52,7 @@ function extractOrgaoCnpj(item = {}, sourcePath = "") {
     item.cnpj,
     item.cnpjOrgao,
     item.cnpj_origem,
+    String(item.pncp_id || "").match(/^(\d{14})-/)?.[1],
     sourcePath.match(/^\/compras\/(\d{14})\//)?.[1]
   ];
 
@@ -83,7 +87,7 @@ function parseDirectIdentifiers(item = {}, sourcePath = "") {
     };
   }
 
-  const control = String(item.numero_controle_pncp || item.numeroControlePNCP || "");
+  const control = String(item.numero_controle_pncp || item.numeroControlePNCP || item.pncp_id || "");
   const slashPattern = control.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
   if (slashPattern) {
     return {
@@ -98,6 +102,21 @@ function parseDirectIdentifiers(item = {}, sourcePath = "") {
     ano: normalizeYear(item.anoCompra || item.ano || item.anoCompraPncp),
     sequencial: normalizeSequential(item.numero_sequencial || item.sequencialCompra || item.numero)
   };
+}
+
+function extractPncpItemYear(item = {}) {
+  const sourcePath = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
+  const direct = parseDirectIdentifiers(item, sourcePath);
+  if (direct.ano) return direct.ano;
+
+  const published = item.data_publicacao_pncp || item.dataPublicacaoPncp || item.dataPublicacao || "";
+  const publishedYear = normalizeYear(String(published).slice(0, 4));
+  return publishedYear || "";
+}
+
+function filterItemsByYear(items = [], targetYear = "") {
+  if (!targetYear) return items;
+  return items.filter((item) => extractPncpItemYear(item) === targetYear);
 }
 
 function buildPncpDirectEditalUrl(cnpj, ano, sequencial) {
@@ -120,6 +139,12 @@ function normalizeText(value) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+function containsExsaFocusKeyword(description = "") {
+  const normalizedDescription = normalizeText(description);
+  if (!normalizedDescription) return false;
+  return EXSA_FOCUS_TERMS.some((term) => normalizedDescription.includes(normalizeText(term)));
 }
 
 function normalizeSpaces(value) {
@@ -327,7 +352,10 @@ function normalizePncpItem(item) {
   const orgaoCnpj = extractOrgaoCnpj(item, sourcePath);
   const directIds = parseDirectIdentifiers(item, sourcePath);
   const directCnpj = directIds.cnpj || orgaoCnpj || "";
-  const directUrl = buildPncpDirectEditalUrl(directCnpj, directIds.ano, directIds.sequencial);
+  const normalizedCnpj = onlyDigits(directCnpj);
+  const normalizedYear = directIds.ano || extractPncpItemYear(item) || null;
+  const normalizedSequential = directIds.sequencial || normalizeSequential(item.numero_sequencial || item.sequencialCompra || item.numero) || null;
+  const directUrl = buildPncpDirectEditalUrl(normalizedCnpj, normalizedYear, normalizedSequential);
 
   // O payload do /api/search costuma trazer `item_url` no formato `/compras/<cnpj>/<ano>/<seq>`.
   // No app do PNCP, o deep-link mais consistente é via `/app/contratacoes/<cnpj>/<ano>/<seq>`.
@@ -355,9 +383,10 @@ function normalizePncpItem(item) {
     organization_name: organizationName,
     orgao_nome: organizationName,
     municipio_orgao: municipioOrgao,
-    orgao_cnpj: orgaoCnpj,
-    edital_ano: directIds.ano || null,
-    edital_sequencial: directIds.sequencial || null,
+    orgao_cnpj: normalizedCnpj.length === 14 ? normalizedCnpj : null,
+    ano: normalizedYear,
+    sequencial: normalizedSequential,
+    portal_origin: "PNCP",
     source_url: sourceUrl,
     pncp_id: String(pncpControl || sequence || Math.random()),
     modality: item.modalidade_licitacao_nome || item.modalidadeNome || item.modalidade || null,
@@ -372,16 +401,18 @@ function normalizePncpItem(item) {
 }
 
 function normalizeComprasRow(row = {}) {
-  const title = String(row.title || "Sem titulo").trim();
-  const description = String(row.description || "").trim();
-  const organizationRaw = String(row.organization || "Orgao nao informado").trim();
+  const title = String(row.title || row.titulo || `Licitacao ${row.numero_licitacao || row.numeroLicitacao || ""}` || "Sem titulo").trim();
+  const description = String(row.objeto || row.description || "").trim();
+  const uasgLabel = row.uasg ? `UASG: ${row.uasg}` : "";
+  const organizationRaw = String(row.orgao_nome || row.organization || row.uasg_nome || uasgLabel || "Orgao nao informado").trim();
   const organization = stripCommonOrgNoise(organizationRaw) || organizationRaw || "Orgao nao informado";
-  const cnpj = onlyDigits(row.orgao_cnpj || "");
-  const ano = normalizeYear(row.ano || row.edital_ano || "");
-  const sequencial = normalizeSequential(row.sequencial || row.edital_sequencial || "");
+  const cnpj = onlyDigits(row.orgao_cnpj || row.cnpj_orgao || "");
+  const abertura = row.data_abertura || row.data_entrega_proposta || row.published_date || null;
+  const ano = normalizeYear(row.ano || row.edital_ano || (abertura ? String(new Date(abertura).getFullYear()) : ""));
+  const sequencial = normalizeSequential(row.sequencial || row.edital_sequencial || row.numero_licitacao || row.numeroLicitacao || "");
   const municipioOrgao = extractMunicipioOrgao(organization);
-  const sourceUrl = String(buildPncpDirectEditalUrl(cnpj, ano, sequencial) || row.url || buildPncpSearchFallbackUrl(cnpj, organization)).trim();
-  const baseId = onlyDigits(cnpj) || normalizeText(`${title}-${organization}`).replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+  const sourceUrl = String(row._links?.self?.href || row.url || COMPRAS_DADOS_GOV_URL).trim();
+  const baseId = normalizeText(`${title}-${organization}-${sequencial || ano || "0"}`).replace(/[^a-z0-9]+/g, "-").slice(0, 80);
 
   return {
     title,
@@ -390,18 +421,46 @@ function normalizeComprasRow(row = {}) {
     orgao_nome: organization,
     municipio_orgao: municipioOrgao,
     orgao_cnpj: cnpj.length === 14 ? cnpj : null,
-    edital_ano: ano || null,
-    edital_sequencial: sequencial || null,
+    ano: ano || null,
+    sequencial: sequencial || null,
+    portal_origin: "Compras.gov.br",
+    objeto_descricao: description,
+    data_abertura: abertura,
     source_url: sourceUrl,
     pncp_id: `compras-${baseId || Math.random().toString(36).slice(2, 10)}`,
     modality: null,
     cnae_principal: null,
-    published_date: row.published_date || new Date().toISOString(),
-    closing_date: row.closing_date || null,
+    published_date: abertura || row.published_date || new Date().toISOString(),
+    closing_date: row.closing_date || row.data_abertura || null,
     source_system: "COMPRAS_GOV",
     source_priority: 1,
-    status: "recebendo_propostas",
+    status: "aberto",
     source: "Compras.gov.br"
+  };
+}
+
+function mapNormalizedToBidSchema(item = {}) {
+  const {
+    ano: rawAno,
+    sequencial: rawSequencial,
+    edital_ano: rawEditalAno,
+    edital_sequencial: rawEditalSequencial,
+    ...rest
+  } = item;
+
+  const ano = normalizeYear(rawAno || rawEditalAno || "") || null;
+  const sequencial = normalizeSequential(rawSequencial || rawEditalSequencial || "") || null;
+  const cnpj = onlyDigits(rest.orgao_cnpj || "");
+
+  return {
+    ...rest,
+    orgao_nome: rest.orgao_nome || rest.organization_name || "Orgao nao informado",
+    orgao_cnpj: cnpj.length === 14 ? cnpj : null,
+    objeto_descricao: rest.objeto_descricao || rest.description || rest.title || "",
+    data_abertura: rest.data_abertura || rest.published_date || null,
+    edital_ano: ano,
+    edital_sequencial: sequencial,
+    portal_origin: rest.portal_origin || rest.source_system || rest.source || "Desconhecido"
   };
 }
 
@@ -505,7 +564,7 @@ function dedupeByPncpId(items) {
   return Array.from(map.values());
 }
 
-async function fetchPncpByKeyword(keyword) {
+async function fetchPncpByKeyword(keyword, targetYear = "") {
   try {
     const query = new URLSearchParams({
       tipos_documento: "edital",
@@ -514,6 +573,11 @@ async function fetchPncpByKeyword(keyword) {
       pagina: "1",
       tamanhoPagina: "50"
     });
+    const normalizedTargetYear = normalizeYear(targetYear);
+    if (normalizedTargetYear) {
+      query.set("ano", normalizedTargetYear);
+      query.set("anoCompra", normalizedTargetYear);
+    }
     const url = `${PNCP_SEARCH_URL}?${query.toString()}`;
     const response = await fetch(url);
     if (!response.ok) {
@@ -530,7 +594,7 @@ async function fetchPncpByKeyword(keyword) {
   }
 }
 
-async function fetchRecentPncpPages(totalPages = 2) {
+async function fetchRecentPncpPages(totalPages = 2, targetYear = "") {
   const pages = [];
 
   for (let page = 1; page <= totalPages; page += 1) {
@@ -545,6 +609,11 @@ async function fetchRecentPncpPages(totalPages = 2) {
         pagina: String(page),
         tamanhoPagina: "50"
       });
+      const normalizedTargetYear = normalizeYear(targetYear);
+      if (normalizedTargetYear) {
+        query.set("ano", normalizedTargetYear);
+        query.set("anoCompra", normalizedTargetYear);
+      }
       const url = `${PNCP_SEARCH_URL}?${query.toString()}`;
 
       try {
@@ -561,6 +630,84 @@ async function fetchRecentPncpPages(totalPages = 2) {
   return responses.flat();
 }
 
+async function fetchPncpSource({ searchTerms, targetYear, requestKeywords }) {
+  const allResults = await Promise.all(searchTerms.map((keyword) => fetchPncpByKeyword(keyword, targetYear)));
+  const warnings = allResults.filter((result) => result.warning).map((result) => result.warning);
+  let rawItems = filterItemsByYear(allResults.flatMap((result) => result.items), targetYear);
+
+  if (rawItems.length < 5) {
+    const recentItems = filterItemsByYear(await fetchRecentPncpPages(3, targetYear), targetYear);
+    rawItems = [...rawItems, ...recentItems];
+  }
+
+  const statusValidated = rawItems.filter((item) => isReceivingProposals(item));
+  const keywordValidated = statusValidated.filter((item) => hasExactKeywordInMainFields(item, requestKeywords));
+  const flattened = keywordValidated.map((raw) => ({ bid: normalizePncpItem(raw), raw }));
+  const deduped = dedupeByPncpId(flattened);
+
+  return {
+    source: "PNCP",
+    warnings,
+    rawCount: rawItems.length,
+    statusCount: statusValidated.length,
+    keywordCount: keywordValidated.length,
+    items: deduped
+  };
+}
+
+async function fetchComprasGovSource({ searchTerms }) {
+  try {
+    const response = await fetch(COMPRAS_DADOS_GOV_URL, {
+      headers: { "User-Agent": "Licita-E/1.0 (ComprasDadosGov)" }
+    });
+
+    if (!response.ok) {
+      throw new Error(`http_${response.status}`);
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    const rawRows = Array.isArray(payload?._embedded?.licitacoes) ? payload._embedded.licitacoes : [];
+
+    const focusRegex = new RegExp(COMPRAS_FOCUS_TERMS.map((term) => normalizeText(term)).join("|"), "i");
+
+    const filteredRows = rawRows.filter((row) => {
+      const objeto = normalizeText(row?.objeto || "");
+      if (!objeto) return false;
+      return focusRegex.test(objeto);
+    });
+
+    const items = filteredRows.map((row) => ({ bid: normalizeComprasRow(row), raw: row }));
+    return {
+      source: "ComprasGov",
+      warnings: [],
+      rawCount: rawRows.length,
+      items
+    };
+  } catch (error) {
+    return {
+      source: "ComprasGov",
+      warnings: [`Compras.gov indisponivel: ${String(error?.message || error)}`],
+      rawCount: 0,
+      items: []
+    };
+  }
+}
+
+async function fetchStatePortalsSource() {
+  return {
+    source: "StatePortals",
+    warnings: [],
+    rawCount: 0,
+    items: []
+  };
+}
+
+const fetchers = {
+  PNCP: fetchPncpSource,
+  ComprasGov: fetchComprasGovSource,
+  StatePortals: fetchStatePortalsSource
+};
+
 async function clearBidsTableForFullSync(supabase) {
   const { error } = await supabase.from("bids").delete().not("id", "is", null);
   if (error) {
@@ -570,9 +717,17 @@ async function clearBidsTableForFullSync(supabase) {
 
 async function upsertBids(supabase, rows) {
   const { error } = await supabase.from("bids").upsert(rows, { onConflict: "pncp_id" });
-  if (error) {
-    throw new Error(error.message);
+  if (!error) return;
+
+  const errorMessage = String(error.message || "").toLowerCase();
+  if (errorMessage.includes("portal_origin") && errorMessage.includes("column")) {
+    const fallbackRows = rows.map(({ portal_origin, ...rest }) => rest);
+    const fallback = await supabase.from("bids").upsert(fallbackRows, { onConflict: "pncp_id" });
+    if (!fallback.error) return;
+    throw new Error(fallback.error.message);
   }
+
+  throw new Error(error.message);
 }
 
 async function applyPreflightValidation(rows) {
@@ -617,6 +772,7 @@ export default async function handler(req, res) {
 
   const requestKeywords = req.body?.keywords?.length ? req.body.keywords : KEYWORDS;
   const fullSync = Boolean(req.body?.fullSync);
+  const targetYear = normalizeYear(req.body?.year || req.body?.targetYear || "") || DEFAULT_SYNC_YEAR;
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   try {
@@ -629,6 +785,7 @@ export default async function handler(req, res) {
     }
 
     console.log(`[PNCP-SEARCH] Iniciando busca com ${searchTerms.length} termos de perfil.`);
+    console.log(`[PNCP-SEARCH] Ano alvo da sincronizacao: ${targetYear}`);
     console.log(`[PNCP-SEARCH] Perfil ativo:`, {
       keywords: profile.keywords.length,
       niches: profile.niches.length,
@@ -636,65 +793,40 @@ export default async function handler(req, res) {
       cnaes: profile.cnaes.length
     });
 
-    const allResults = await Promise.all(searchTerms.map((keyword) => fetchPncpByKeyword(keyword)));
-    const warnings = allResults.filter((result) => result.warning).map((result) => result.warning);
-    let rawItems = allResults.flatMap((result) => result.items);
+    const sourceEntries = Object.entries(fetchers);
+    const sourceResults = await Promise.all(
+      sourceEntries.map(async ([sourceName, fetchSource]) => {
+        const result = await fetchSource({ searchTerms, targetYear, requestKeywords });
+        return { sourceName, ...result };
+      })
+    );
 
-    console.log(`[PNCP-SEARCH] Itens brutos de busca por keyword: ${rawItems.length}`);
-    console.log(`[PNCP-SEARCH] Warnings: ${warnings.join(" | ")}`);
+    const warnings = sourceResults.flatMap((result) => result.warnings || []);
+    const allFetchedItems = sourceResults.flatMap((result) => result.items || []);
 
-    // Fallback quando API por termo retorna vazia/instavel: busca paginas recentes e filtra localmente.
-    if (rawItems.length < 5) {
-      console.log(`[PNCP-SEARCH] Poucos itens (${rawItems.length}), acionando fallback fetchRecentPncpPages...`);
-      const recentItems = await fetchRecentPncpPages(3);
-      console.log(`[PNCP-SEARCH] Itens recentes obtidos: ${recentItems.length}`);
-      rawItems = [...rawItems, ...recentItems];
+    for (const sourceResult of sourceResults) {
+      console.log(`[PNCP-SEARCH] Fonte ${sourceResult.sourceName}: itens=${sourceResult.items?.length || 0} warnings=${(sourceResult.warnings || []).length}`);
     }
 
-    const statusValidated = rawItems.filter((item) => isReceivingProposals(item));
-    const keywordValidated = statusValidated.filter((item) => hasExactKeywordInMainFields(item, requestKeywords));
+    console.log(`[PNCP-SEARCH] Total multi-fonte normalizado: ${allFetchedItems.length}`);
 
-    console.log(`[PNCP-SEARCH] Apos validacao de status: ${statusValidated.length}`);
-    console.log(`[PNCP-SEARCH] Apos filtro de keyword exata: ${keywordValidated.length}`);
-
-    rawItems = keywordValidated;
-
-    console.log(`[PNCP-SEARCH] Total de raw items após fallback: ${rawItems.length}`);
-
-    const flattened = rawItems.map((raw) => ({ bid: normalizePncpItem(raw), raw }));
-    const deduped = dedupeByPncpId(flattened);
-
-    const comprasRowsRaw = await fetchComprasGovOpenBidsByKeywords(searchTerms, { pageSize: 30 });
-    const comprasRows = comprasRowsRaw.map((row) => normalizeComprasRow(row));
-
-    console.log(`[PNCP-SEARCH] Após normalizar e deduplicar: ${deduped.length} itens`);
-
-    // Log de alguns itens para debug
-    if (deduped.length > 0) {
-      console.log(`[PNCP-SEARCH] Amostra de itens:`, deduped.slice(0, 2).map((row) => ({ title: row.bid.title, org: row.bid.organization_name })));
+    if (allFetchedItems.length > 0) {
+      console.log(
+        `[PNCP-SEARCH] Amostra de itens multi-fonte:`,
+        allFetchedItems.slice(0, 2).map((row) => ({ title: row.bid.title, org: row.bid.organization_name, origem: row.bid.portal_origin }))
+      );
     }
 
-    const scoredPncpItems = deduped
+    const scoredItems = allFetchedItems
       .map((row) => {
-        const bid = row.bid;
-        const raw = row.raw;
-        const ticketValue = extractTicketValue(raw);
-        const text = `${bid.title} ${bid.description || ""} ${bid.organization_name || ""} ${bid.modality || ""} ${bid.pncp_id || ""} ${bid.cnae_principal || ""}`;
+        const normalizedBid = mapNormalizedToBidSchema(row.bid);
+        const ticketValue = extractTicketValue(row.raw || {});
+        const text = `${normalizedBid.title} ${normalizedBid.description || ""} ${normalizedBid.organization_name || ""} ${normalizedBid.modality || ""} ${normalizedBid.pncp_id || ""} ${normalizedBid.cnae_principal || ""}`;
         const relevance = scoreBid(text, profile, ticketValue);
-        return { bid, relevance, ticketValue };
+        return { bid: normalizedBid, relevance, ticketValue };
       })
       .filter((row) => !row.relevance.shouldHide)
-      .sort((a, b) => b.relevance.total - a.relevance.total);
-
-    const scoredComprasItems = comprasRows
-      .map((bid) => {
-        const text = `${bid.title} ${bid.description || ""} ${bid.organization_name || ""}`;
-        const relevance = scoreBid(text, profile, null);
-        return { bid, relevance };
-      })
-      .filter((row) => !row.relevance.shouldHide);
-
-    const scoredItems = [...scoredComprasItems, ...scoredPncpItems].sort((a, b) => {
+      .sort((a, b) => {
       const priorityDiff = (a.bid.source_priority || 99) - (b.bid.source_priority || 99);
       if (priorityDiff !== 0) return priorityDiff;
       return b.relevance.total - a.relevance.total;
@@ -702,15 +834,10 @@ export default async function handler(req, res) {
 
     const highMatches = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 8);
     const mediumMatches = scoredItems.filter((row) => row.relevance.strongMatch && row.relevance.total >= 3);
-    const broadMatches = scoredItems.filter((row) => row.relevance.total > 0);
+    const broadMatches = scoredItems;
 
-    const selectedRows = highMatches.length
-      ? highMatches
-      : mediumMatches.length
-        ? mediumMatches
-        : broadMatches.length
-          ? broadMatches
-          : scoredItems.slice(0, 40);
+    // Na sincronizacao inicial queremos visibilidade ampla: sem filtro por aderencia_score > 0.
+    const selectedRows = broadMatches.length ? broadMatches : scoredItems.slice(0, 40);
 
     const selected = selectedRows.map((row) => row.bid).slice(0, 60);
 
@@ -720,7 +847,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         inserted: 0,
         warnings,
-        message: "Nenhum edital encontrado na PNCP"
+        message: "Nenhum edital encontrado nas fontes configuradas"
       });
     }
 
@@ -737,20 +864,40 @@ export default async function handler(req, res) {
       });
     }
 
-    await upsertBids(supabase, preflight.validRows);
+    const nicheRows = preflight.validRows.filter((row) => containsExsaFocusKeyword(row.description || ""));
+    const skippedByNiche = preflight.validRows.length - nicheRows.length;
 
-    console.log(`[PNCP-SEARCH] Sucesso: inseridos ${preflight.validRows.length} editais`);
+    if (nicheRows.length === 0) {
+      return res.status(200).json({
+        inserted: 0,
+        warnings: [
+          ...warnings,
+          ...preflightWarnings,
+          `Sem insercao: ${skippedByNiche} editais nao contem palavras-chave do nicho ExSA na descricao`
+        ],
+        message: "Nenhum edital alinhado ao nicho ExSA para insercao"
+      });
+    }
+
+    await upsertBids(supabase, nicheRows);
+
+    console.log(`[PNCP-SEARCH] Sucesso: inseridos ${nicheRows.length} editais (filtrados por nicho ExSA)`);
     return res.status(200).json({
-      inserted: preflight.validRows.length,
-      warnings: [...warnings, ...preflightWarnings],
-      validated: preflight.validRows.map((item) => ({
+      inserted: nicheRows.length,
+      warnings: skippedByNiche > 0
+        ? [...warnings, ...preflightWarnings, `${skippedByNiche} editais descartados por nao aderirem ao nicho ExSA`]
+        : [...warnings, ...preflightWarnings],
+      validated: nicheRows.map((item) => ({
         pncp_id: item.pncp_id,
         title: item.title,
         organization_name: item.organization_name,
         municipio_orgao: item.municipio_orgao || null,
         orgao_cnpj: item.orgao_cnpj || null,
+        ano: item.edital_ano || null,
+        sequencial: item.edital_sequencial || null,
         edital_ano: item.edital_ano || null,
         edital_sequencial: item.edital_sequencial || null,
+        portal_origin: item.portal_origin || item.source_system || item.source || null,
         status: item.status,
         source_url: item.source_url,
         source_system: item.source_system || "PNCP",

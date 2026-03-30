@@ -48,6 +48,7 @@ alter table public.bids add column if not exists link_validation_error text;
 alter table public.bids add column if not exists link_checked_at timestamptz;
 alter table public.bids add column if not exists source_system text;
 alter table public.bids add column if not exists source_priority integer;
+alter table public.bids add column if not exists portal_origin text;
 alter table public.bids add column if not exists score_esa integer;
 alter table public.bids add column if not exists ia_relevance_status text;
 alter table public.bids add column if not exists pdf_text_length integer;

@@ -183,7 +183,7 @@ export default function DashboardPage() {
         <section className="rounded-2xl border border-brand-brown/10 bg-white p-5 shadow-panel">
           {isLoading && <p className="font-body text-brand-ink/80">Carregando editais...</p>}
           {error && <p className="font-body text-sm text-red-700">{error}</p>}
-          {warnings.length > 0 && (
+          {warnings.length > 0 && filteredBids.length === 0 && (
             <p className="mb-3 font-body text-sm text-amber-700">
               Sincronizacao parcial: {warnings.length} palavras-chave indisponiveis temporariamente no PNCP.
             </p>

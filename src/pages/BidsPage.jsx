@@ -110,6 +110,7 @@ export default function BidsPage() {
       setIsLoading(true);
       setError("");
       setWarnings([]);
+      const PNCP_UNAVAILABLE_WARNING = "Fonte PNCP temporariamente indisponivel";
       const supabase = getSupabaseClientOrThrow();
 
       let fromDate = null;
@@ -197,12 +198,11 @@ export default function BidsPage() {
       }));
 
       let normalizedExternal = [];
+      let nextWarnings = [];
       if (externalResult.ok) {
         const payload = await externalResult.json().catch(() => ({}));
         const sourceWarnings = normalizeExternalWarnings(payload.warnings || []);
-        if (sourceWarnings.length > 0) {
-          setWarnings(sourceWarnings);
-        }
+        nextWarnings = sourceWarnings;
 
         normalizedExternal = (payload.data || []).map((row, index) => ({
           ...(function () {
@@ -238,7 +238,7 @@ export default function BidsPage() {
           estado: "-"
         }));
       } else {
-        setWarnings(["Fontes externas temporariamente indisponiveis"]);
+        nextWarnings = ["Fontes externas temporariamente indisponiveis"];
       }
 
       const hiddenFiltered = [...normalizedInternal, ...normalizedExternal].filter((row) => {
@@ -253,6 +253,11 @@ export default function BidsPage() {
         return new Date(b.published_date || 0) - new Date(a.published_date || 0);
       });
 
+      if (hiddenFiltered.length > 0) {
+        nextWarnings = nextWarnings.filter((warning) => warning !== PNCP_UNAVAILABLE_WARNING);
+      }
+
+      setWarnings(Array.from(new Set(nextWarnings)));
       setBids(hiddenFiltered);
     } catch (err) {
       setError(err.message || "Falha ao carregar editais.");
