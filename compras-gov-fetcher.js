@@ -1,42 +1,37 @@
 import { createClient } from "@supabase/supabase-js";
+// Carregue suas variáveis de ambiente conforme seu setup (.env)
 
-const COMPRAS_GOV_URLS = [
-  "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?situacao=1", // '1' é o código para Aberta
-  "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?item_material_servico=servico&situacao=1"
-];
+const API_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?situacao=1"; // 1 = ABERTA
+const KEYWORDS = ["socioambiental", "clpi", "quilombola", "diagnostico", "indigena"];
 
-// Palavras-chave da Expressão Socioambiental
-const EXSA_KEYWORDS = ["diagnostico", "socioambiental", "clpi", "quilombola", "meio ambiente"];
-
-async function fetchAndSync() {
-  console.log("Iniciando busca no Compras.gov.br...");
+async function sync() {
+  console.log("Iniciando captura profissional...");
   
-  for (const url of COMPRAS_GOV_URLS) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) continue; // Pula se der erro 404/500
+  try {
+    const response = await fetch(API_URL);
+    const data = await response.json();
+    const licitacoes = data._embedded?.licitacoes || [];
 
-      const data = await response.json();
-      const licitacoes = data._embedded?.licitacoes || [];
+    // Filtro de Especialista: Só entra o que é do nicho da ExSA
+    const filtered = licitacoes.filter(bid => 
+      KEYWORDS.some(key => bid.objeto.toLowerCase().includes(key))
+    ).map(bid => ({
+      pncp_id: `compras-${bid.uasg}-${bid.numero_licitacao}`,
+      title: `Licitação ${bid.numero_licitacao}`,
+      objeto_descricao: bid.objeto, // Nome correto da coluna
+      orgao_nome: `UASG: ${bid.uasg}`,
+      portal_origin: 'Compras.gov.br',
+      status: 'aberto',
+      aderencia_score: 10, // Garante que apareça na Dashboard
+      alta_aderencia: true
+    }));
 
-      const filtered = licitacoes.filter(bid => 
-        EXSA_KEYWORDS.some(key => bid.objeto.toLowerCase().includes(key))
-      ).map(bid => ({
-        pncp_id: `compras-${bid.uasg}-${bid.numero_licitacao}`,
-        title: `Licitação ${bid.numero_licitacao}`,
-        description: bid.objeto,
-        portal_origin: 'Compras.gov.br',
-        orgao_nome: `UASG: ${bid.uasg}`,
-        status: 'aberto',
-        aderencia_score: 10, // Define score alto para aparecer na Dashboard
-        alta_aderencia: true
-      }));
-
-      // Aqui você faz o upsert no Supabase (mesma lógica que você já tem)
-      console.log(`Sucesso: ${filtered.length} editais encontrados.`);
-      if (filtered.length > 0) break; 
-    } catch (err) {
-      console.error("Erro no fetcher:", err.message);
-    }
+    console.log(`Encontrados ${filtered.length} editais relevantes.`);
+    // Lógica de salvamento no Supabase aqui...
+    
+  } catch (err) {
+    console.error("Erro crítico no fetcher:", err.message);
   }
 }
+
+sync();
