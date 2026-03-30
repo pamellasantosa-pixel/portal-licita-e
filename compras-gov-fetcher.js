@@ -1,7 +1,7 @@
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
 
-const COMPRAS_GOV_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?situacao=aberta";
+const COMPRAS_GOV_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json";
 const EXSA_KEYWORDS = ["diagnostico", "estudo ambiental", "clpi", "quilombola"];
 
 function loadEnvFile(path = ".env") {
@@ -60,7 +60,10 @@ function normalizeComprasBid(bid = {}, index = 0) {
 }
 
 async function fetchComprasGovBids() {
-  const response = await fetch(COMPRAS_GOV_URL, {
+  const url = COMPRAS_GOV_URL;
+  console.log(url);
+
+  const response = await fetch(url, {
     headers: {
       "User-Agent": "Licita-E/1.0 (ComprasGov Fetcher)"
     }
