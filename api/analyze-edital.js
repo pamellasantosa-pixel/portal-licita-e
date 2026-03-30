@@ -9,7 +9,7 @@
   TARGET_ORGS
 } from "./_shared/filters.js";
 import { extractPdfTextFromUrl } from "./_shared/pdf-content-service.js";
-import { evaluatePdfTextRelevanceGate } from "../src/lib/esaScoring.js";
+import { evaluateEsaScore, evaluatePdfTextRelevanceGate } from "../src/lib/esaScoring.js";
 
 function normalizeText(value) {
   return String(value || "")
@@ -115,37 +115,58 @@ export default async function handler(req, res) {
   const pdfExtraction = await extractPdfTextFromUrl(pdfUrl, { timeoutMs: 25000 });
   const pdfText = pdfExtraction.ok ? String(pdfExtraction.text || "") : "";
   const relevanceGate = evaluatePdfTextRelevanceGate(pdfText);
+  const metadataText = `${bidTitle || ""} ${description || ""} ${organizationName || ""} ${modality || ""} ${pncpId || ""}`
+    .replace(/\s+/g, " ")
+    .trim();
+  const normalizedMetadata = normalizeText(metadataText);
+  const metadataScore = evaluateEsaScore(metadataText, { organizationName: organizationName || "" });
+  const metadataProfile = scoreWithProfile(normalizedMetadata);
+  const metadataKeywordHits = KEYWORDS.filter((term) => normalizedMetadata.includes(normalizeText(term)));
+  const metadataPositiveSignals = [...NICHES, ...PROJECT_TERMS, ...REQUIRED_TERMS].filter((term) =>
+    normalizedMetadata.includes(normalizeText(term))
+  );
+  const metadataWarningSignals = EXCLUSION_TERMS.filter((term) => normalizedMetadata.includes(normalizeText(term)));
 
   if (!pdfExtraction.ok || !relevanceGate.isRelevant) {
+    const fallbackScore = Math.max(Number(metadataScore.score || 0), Number(metadataProfile.score || 0));
+    const fallbackIsViable = fallbackScore >= 8 || Boolean(metadataScore.highAdherence);
+    const fallbackStatus = fallbackIsViable ? "relevante" : "revisar";
     const summary = {
-      method: "analise_pdf_real",
+      method: "analise_hibrida_fallback",
       guidelines: guidelines || "Diretrizes ESA padrao",
       source_reference: pdfUrl || "https://pncp.gov.br/app/editais?pagina=1",
-      is_viable: false,
-      score: 0,
-      score_esa: 0,
-      confidence: 95,
-      ia_relevance_status: "irrelevante",
-      relevance_reason: !pdfExtraction.ok ? `Falha ao processar PDF: ${pdfExtraction.error}` : relevanceGate.reason,
-      keywords_encontradas: relevanceGate.matchedTerms || [],
-      sinais_positivos: [],
-      sinais_de_atencao: ["Analise bloqueada por trava de seguranca de relevancia"],
+      is_viable: fallbackIsViable,
+      score: fallbackScore,
+      score_esa: fallbackScore,
+      confidence: fallbackIsViable ? 78 : 60,
+      ia_relevance_status: fallbackStatus,
+      relevance_reason: !pdfExtraction.ok
+        ? `PDF indisponivel (${pdfExtraction.error}); analise feita por metadados do edital.`
+        : `${relevanceGate.reason}; analise feita por metadados do edital.`,
+      keywords_encontradas: metadataKeywordHits,
+      sinais_positivos: metadataPositiveSignals,
+      sinais_de_atencao: [
+        "PDF sem confirmacao minima de aderencia; resultado baseado em metadados.",
+        ...metadataWarningSignals
+      ],
       score_breakdown: {
-        keywordHits: 0,
-        nicheHits: 0,
-        projectHits: 0,
-        requiredHits: 0,
-        cnaeHits: 0,
-        orgHits: 0,
-        territoryHits: 0,
-        exclusionHits: 0
+        keywordHits: metadataProfile.keywordHits,
+        nicheHits: metadataProfile.nicheHits,
+        projectHits: metadataProfile.projectHits,
+        requiredHits: metadataProfile.requiredHits,
+        cnaeHits: metadataProfile.cnaeHits,
+        orgHits: metadataProfile.orgHits,
+        territoryHits: metadataProfile.territoryHits,
+        exclusionHits: metadataProfile.exclusionHits
       },
       objeto_esa_resumo: {
-        comunidade_afetada: ["Irrelevante"],
-        entregaveis_tecnicos: ["Nao inferido"],
-        sintese: "Analise nao executada: texto PDF ausente ou sem aderencia minima confirmada."
+        comunidade_afetada: extractCommunitySummary(metadataText),
+        entregaveis_tecnicos: extractTechnicalDeliverables(metadataText),
+        sintese: "Analise gerada com fallback por metadados porque o PDF nao estava disponivel/aderente."
       },
-      justification: "Bloqueado pela trava de seguranca: sem texto PDF valido com no minimo 2 termos de aderencia.",
+      justification: fallbackIsViable
+        ? "Coerente com os sinais do cadastro do edital, mas recomenda-se validar no documento oficial quando o PDF estiver disponivel."
+        : "Sinais insuficientes no cadastro do edital e sem texto PDF confiavel para confirmar aderencia.",
       deliverables: [],
       pdf_meta: {
         ok: pdfExtraction.ok,
