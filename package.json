@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "qa": "npm run qa:pncp",
     "qa:pncp": "node qa_pncp_links_playwright.js",
-    "test:direct-url": "node test-direct-pncp-url.js"
+    "test:direct-url": "node test-direct-pncp-url.js",
+    "fetch:compras": "node compras-gov-fetcher.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",
