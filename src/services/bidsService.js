@@ -23,6 +23,26 @@ export async function getTodayBids() {
   return data ?? [];
 }
 
+export async function getRelevantBids() {
+  const supabase = getSupabaseClientOrThrow();
+
+  const selectFields =
+    "id,title,description,published_date,status,is_favorite,is_rejected,organization_name,orgao_nome,orgao_cnpj,source_url,aderencia_score,alta_aderencia";
+
+  const { data, error } = await supabase
+    .from("bids")
+    .select(selectFields)
+    .gt("aderencia_score", 0)
+    .order("published_date", { ascending: false })
+    .limit(300);
+
+  if (error) {
+    throw new Error(`Erro ao carregar bids relevantes: ${error.message}`);
+  }
+
+  return data ?? [];
+}
+
 export async function getAllBids() {
   const supabase = getSupabaseClientOrThrow();
 

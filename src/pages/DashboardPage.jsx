@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getTodayBids } from "../services/bidsService";
+import { getRelevantBids } from "../services/bidsService";
 import { syncPncBids } from "../services/pncpService";
 import { getSupabaseClientOrThrow } from "../lib/supabaseClient";
 import MainNav from "../components/MainNav";
@@ -24,7 +24,7 @@ export default function DashboardPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState([]);
-  const [period, setPeriod] = useState("hoje");
+  const [period, setPeriod] = useState("30dias");
   const [category, setCategory] = useState("todas");
 
   useEffect(() => {
@@ -33,7 +33,7 @@ export default function DashboardPage() {
         setIsLoading(true);
         setError("");
         setWarnings([]);
-        const data = await getTodayBids();
+        const data = await getRelevantBids();
         setBids(data);
 
         const lastSync = Number(localStorage.getItem(AUTO_SYNC_KEY) || "0");
@@ -47,11 +47,11 @@ export default function DashboardPage() {
             setWarnings(result.warnings);
           }
           localStorage.setItem(AUTO_SYNC_KEY, String(Date.now()));
-          const updated = await getTodayBids();
+          const updated = await getRelevantBids();
           setBids(updated);
         }
       } catch (err) {
-        setError(err.message || "Falha ao carregar editais de hoje.");
+        setError(err.message || "Falha ao carregar editais relevantes.");
       } finally {
         setIsSyncing(false);
         setIsLoading(false);
@@ -79,7 +79,7 @@ export default function DashboardPage() {
       if (result.warnings?.length) {
         setWarnings(result.warnings);
       }
-      const data = await getTodayBids();
+      const data = await getRelevantBids();
       setBids(data);
     } catch (err) {
       setError(err.message || "Nao foi possivel sincronizar com o PNCP.");
@@ -97,7 +97,11 @@ export default function DashboardPage() {
   const filteredBids = useMemo(() => {
     let result = [...bids];
 
-    if (period !== "hoje") {
+    if (period === "hoje") {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      result = result.filter((item) => new Date(item.published_date) >= start);
+    } else {
       const days = period === "7dias" ? 7 : 30;
       const start = new Date();
       start.setDate(start.getDate() - days);
@@ -190,7 +194,7 @@ export default function DashboardPage() {
           )}
 
           {!isLoading && !error && filteredBids.length === 0 && (
-            <p className="font-body text-brand-ink/80">Nenhum edital novo encontrado para hoje.</p>
+            <p className="font-body text-brand-ink/80">Nenhum edital relevante encontrado para o periodo selecionado.</p>
           )}
 
           {!isLoading && filteredBids.length > 0 && (
