@@ -15,8 +15,16 @@ import { validateDocumentLink } from "./_shared/link-validation.js";
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 const PNCP_BASE_URL = "https://pncp.gov.br";
-const COMPRAS_DADOS_GOV_URL = "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?item_material_servico=servico&situacao=aberta";
+const COMPRAS_DADOS_GOV_URLS = [
+  process.env.COMPRAS_GOV_URL,
+  "https://api.compras.gov.br/licitacoes/v1/licitacoes?pagina=1&tamanhoPagina=50",
+  "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?situacao=aberta",
+  "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json"
+].filter(Boolean);
 const DEFAULT_SYNC_YEAR = "2026";
+const STRICT_EXSA_INSERT = String(process.env.STRICT_EXSA_INSERT || "false").toLowerCase() === "true";
+const DEFAULT_CAPTURE_MODE = String(process.env.CAPTURE_MODE || "max_recall").toLowerCase();
+const ENFORCE_LINK_VALIDATION_DEFAULT = String(process.env.ENFORCE_LINK_VALIDATION || "false").toLowerCase() === "true";
 const PRIORITY_CNAES = ["7490-1/99", "7320-3/00", "7119-7/99"];
 const RECEIVING_PROPOSALS_STATUSES = ["recebendo_proposta", "recebendo propostas", "recebendo proposta", "1"];
 
@@ -411,7 +419,7 @@ function normalizeComprasRow(row = {}) {
   const ano = normalizeYear(row.ano || row.edital_ano || (abertura ? String(new Date(abertura).getFullYear()) : ""));
   const sequencial = normalizeSequential(row.sequencial || row.edital_sequencial || row.numero_licitacao || row.numeroLicitacao || "");
   const municipioOrgao = extractMunicipioOrgao(organization);
-  const sourceUrl = String(row._links?.self?.href || row.url || COMPRAS_DADOS_GOV_URL).trim();
+  const sourceUrl = String(row._links?.self?.href || row.url || COMPRAS_DADOS_GOV_URLS[0] || "").trim();
   const baseId = normalizeText(`${title}-${organization}-${sequencial || ano || "0"}`).replace(/[^a-z0-9]+/g, "-").slice(0, 80);
 
   return {
@@ -564,6 +572,88 @@ function dedupeByPncpId(items) {
   return Array.from(map.values());
 }
 
+function buildStrongDedupKey(bid = {}) {
+  if (bid.orgao_cnpj && bid.edital_ano && bid.edital_sequencial) {
+    return `strong:${bid.orgao_cnpj}|${bid.edital_ano}|${bid.edital_sequencial}`;
+  }
+  return "";
+}
+
+function buildFuzzyDedupKey(bid = {}) {
+  const org = normalizeText(bid.orgao_nome || bid.organization_name || "").replace(/[^a-z0-9 ]/g, " ").trim();
+  const title = normalizeText(bid.title || "").replace(/[^a-z0-9 ]/g, " ").trim();
+  const date = String(bid.published_date || bid.data_abertura || "").slice(0, 10);
+
+  const orgTokens = org.split(/\s+/).filter(Boolean).slice(0, 4).join("-");
+  const titleTokens = title.split(/\s+/).filter(Boolean).slice(0, 8).join("-");
+  return `fuzzy:${orgTokens}|${titleTokens}|${date}`;
+}
+
+function isBetterEntry(candidate, current) {
+  if (!current) return true;
+
+  const candidatePriority = Number(candidate?.bid?.source_priority || 99);
+  const currentPriority = Number(current?.bid?.source_priority || 99);
+  if (candidatePriority !== currentPriority) {
+    return candidatePriority < currentPriority;
+  }
+
+  const candidateDesc = String(candidate?.bid?.description || candidate?.bid?.objeto_descricao || "").length;
+  const currentDesc = String(current?.bid?.description || current?.bid?.objeto_descricao || "").length;
+  if (candidateDesc !== currentDesc) {
+    return candidateDesc > currentDesc;
+  }
+
+  const candidateDate = new Date(candidate?.bid?.published_date || 0).getTime();
+  const currentDate = new Date(current?.bid?.published_date || 0).getTime();
+  return candidateDate > currentDate;
+}
+
+function dedupeMergedItems(items = []) {
+  const strongMap = new Map();
+  const fuzzyMap = new Map();
+  let strongDuplicates = 0;
+  let fuzzyDuplicates = 0;
+
+  for (const entry of items) {
+    const normalizedEntry = {
+      ...entry,
+      bid: mapNormalizedToBidSchema(entry.bid)
+    };
+
+    const strongKey = buildStrongDedupKey(normalizedEntry.bid);
+    if (strongKey) {
+      const current = strongMap.get(strongKey);
+      if (current) strongDuplicates += 1;
+      if (isBetterEntry(normalizedEntry, current)) {
+        strongMap.set(strongKey, normalizedEntry);
+      }
+      continue;
+    }
+
+    const fuzzyKey = buildFuzzyDedupKey(normalizedEntry.bid);
+    const current = fuzzyMap.get(fuzzyKey);
+    if (current) fuzzyDuplicates += 1;
+    if (isBetterEntry(normalizedEntry, current)) {
+      fuzzyMap.set(fuzzyKey, normalizedEntry);
+    }
+  }
+
+  const dedupedItems = [...strongMap.values(), ...fuzzyMap.values()];
+  return {
+    items: dedupedItems,
+    metrics: {
+      input_count: items.length,
+      output_count: dedupedItems.length,
+      strong_groups: strongMap.size,
+      fuzzy_groups: fuzzyMap.size,
+      strong_duplicates: strongDuplicates,
+      fuzzy_duplicates: fuzzyDuplicates,
+      duplicates_removed: Math.max(0, items.length - dedupedItems.length)
+    }
+  };
+}
+
 async function fetchPncpByKeyword(keyword, targetYear = "") {
   try {
     const query = new URLSearchParams({
@@ -657,16 +747,40 @@ async function fetchPncpSource({ searchTerms, targetYear, requestKeywords }) {
 
 async function fetchComprasGovSource({ searchTerms }) {
   try {
-    const response = await fetch(COMPRAS_DADOS_GOV_URL, {
-      headers: { "User-Agent": "Licita-E/1.0 (ComprasDadosGov)" }
-    });
+    let rawRows = [];
+    let lastError = "";
 
-    if (!response.ok) {
-      throw new Error(`http_${response.status}`);
+    for (const url of COMPRAS_DADOS_GOV_URLS) {
+      try {
+        const response = await fetch(url, {
+          headers: { "User-Agent": "Licita-E/1.0 (ComprasDadosGov)" }
+        });
+
+        if (!response.ok) {
+          lastError = `http_${response.status}`;
+          continue;
+        }
+
+        const payload = await response.json().catch(() => ({}));
+        rawRows = Array.isArray(payload?._embedded?.licitacoes)
+          ? payload._embedded.licitacoes
+          : Array.isArray(payload?.items)
+            ? payload.items
+            : Array.isArray(payload?.data)
+              ? payload.data
+              : [];
+
+        if (rawRows.length > 0) {
+          break;
+        }
+      } catch (error) {
+        lastError = String(error?.message || error);
+      }
     }
 
-    const payload = await response.json().catch(() => ({}));
-    const rawRows = Array.isArray(payload?._embedded?.licitacoes) ? payload._embedded.licitacoes : [];
+    if (rawRows.length === 0 && lastError) {
+      throw new Error(lastError);
+    }
 
     const focusRegex = new RegExp(COMPRAS_FOCUS_TERMS.map((term) => normalizeText(term)).join("|"), "i");
 
@@ -773,6 +887,8 @@ export default async function handler(req, res) {
   const requestKeywords = req.body?.keywords?.length ? req.body.keywords : KEYWORDS;
   const fullSync = Boolean(req.body?.fullSync);
   const targetYear = normalizeYear(req.body?.year || req.body?.targetYear || "") || DEFAULT_SYNC_YEAR;
+  const captureMode = String(req.body?.captureMode || DEFAULT_CAPTURE_MODE).toLowerCase();
+  const enforceLinkValidation = req.body?.enforceLinkValidation === true || ENFORCE_LINK_VALIDATION_DEFAULT;
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   try {
@@ -786,6 +902,7 @@ export default async function handler(req, res) {
 
     console.log(`[PNCP-SEARCH] Iniciando busca com ${searchTerms.length} termos de perfil.`);
     console.log(`[PNCP-SEARCH] Ano alvo da sincronizacao: ${targetYear}`);
+    console.log(`[PNCP-SEARCH] Modo de captura: ${captureMode} (enforceLinkValidation=${enforceLinkValidation})`);
     console.log(`[PNCP-SEARCH] Perfil ativo:`, {
       keywords: profile.keywords.length,
       niches: profile.niches.length,
@@ -803,23 +920,26 @@ export default async function handler(req, res) {
 
     const warnings = sourceResults.flatMap((result) => result.warnings || []);
     const allFetchedItems = sourceResults.flatMap((result) => result.items || []);
+    const dedupeResult = dedupeMergedItems(allFetchedItems);
+    const dedupedFetchedItems = dedupeResult.items;
 
     for (const sourceResult of sourceResults) {
       console.log(`[PNCP-SEARCH] Fonte ${sourceResult.sourceName}: itens=${sourceResult.items?.length || 0} warnings=${(sourceResult.warnings || []).length}`);
     }
 
     console.log(`[PNCP-SEARCH] Total multi-fonte normalizado: ${allFetchedItems.length}`);
+    console.log(`[PNCP-SEARCH] Dedupe avançado:`, dedupeResult.metrics);
 
-    if (allFetchedItems.length > 0) {
+    if (dedupedFetchedItems.length > 0) {
       console.log(
         `[PNCP-SEARCH] Amostra de itens multi-fonte:`,
-        allFetchedItems.slice(0, 2).map((row) => ({ title: row.bid.title, org: row.bid.organization_name, origem: row.bid.portal_origin }))
+        dedupedFetchedItems.slice(0, 2).map((row) => ({ title: row.bid.title, org: row.bid.organization_name, origem: row.bid.portal_origin }))
       );
     }
 
-    const scoredItems = allFetchedItems
+    const scoredItems = dedupedFetchedItems
       .map((row) => {
-        const normalizedBid = mapNormalizedToBidSchema(row.bid);
+        const normalizedBid = row.bid;
         const ticketValue = extractTicketValue(row.raw || {});
         const text = `${normalizedBid.title} ${normalizedBid.description || ""} ${normalizedBid.organization_name || ""} ${normalizedBid.modality || ""} ${normalizedBid.pncp_id || ""} ${normalizedBid.cnae_principal || ""}`;
         const relevance = scoreBid(text, profile, ticketValue);
@@ -851,7 +971,19 @@ export default async function handler(req, res) {
       });
     }
 
-    const preflight = await applyPreflightValidation(selected);
+    const preflight = enforceLinkValidation
+      ? await applyPreflightValidation(selected)
+      : {
+          validRows: selected.map((row) => ({
+            ...row,
+            is_link_valid: null,
+            link_http_status: null,
+            link_validation_error: "not_checked",
+            link_checked_at: null,
+            link_edital: row.source_url
+          })),
+          invalidRows: []
+        };
     const preflightWarnings = preflight.invalidRows.slice(0, 20).map((item) => {
       return `Link descartado (${item.statusCode}): ${item.title}`;
     });
@@ -866,8 +998,10 @@ export default async function handler(req, res) {
 
     const nicheRows = preflight.validRows.filter((row) => containsExsaFocusKeyword(row.description || ""));
     const skippedByNiche = preflight.validRows.length - nicheRows.length;
+    const shouldEnforceNiche = STRICT_EXSA_INSERT || captureMode === "strict_quality";
+    const rowsToInsert = shouldEnforceNiche ? nicheRows : preflight.validRows;
 
-    if (nicheRows.length === 0) {
+    if (rowsToInsert.length === 0) {
       return res.status(200).json({
         inserted: 0,
         warnings: [
@@ -879,15 +1013,33 @@ export default async function handler(req, res) {
       });
     }
 
-    await upsertBids(supabase, nicheRows);
+    await upsertBids(supabase, rowsToInsert);
 
-    console.log(`[PNCP-SEARCH] Sucesso: inseridos ${nicheRows.length} editais (filtrados por nicho ExSA)`);
+    console.log(`[PNCP-SEARCH] Sucesso: inseridos ${rowsToInsert.length} editais`);
     return res.status(200).json({
-      inserted: nicheRows.length,
-      warnings: skippedByNiche > 0
+      inserted: rowsToInsert.length,
+      warnings: shouldEnforceNiche && skippedByNiche > 0
         ? [...warnings, ...preflightWarnings, `${skippedByNiche} editais descartados por nao aderirem ao nicho ExSA`]
         : [...warnings, ...preflightWarnings],
-      validated: nicheRows.map((item) => ({
+      metrics: {
+        capture_mode: captureMode,
+        full_sync: fullSync,
+        target_year: targetYear,
+        source_stats: sourceResults.map((sourceResult) => ({
+          source: sourceResult.sourceName,
+          fetched_items: sourceResult.items?.length || 0,
+          warnings: (sourceResult.warnings || []).length
+        })),
+        dedupe: dedupeResult.metrics,
+        selected_count: selected.length,
+        preflight_valid_count: preflight.validRows.length,
+        preflight_invalid_count: preflight.invalidRows.length,
+        niche_match_count: nicheRows.length,
+        inserted_count: rowsToInsert.length,
+        enforce_link_validation: enforceLinkValidation,
+        enforce_niche_filter: shouldEnforceNiche
+      },
+      validated: rowsToInsert.map((item) => ({
         pncp_id: item.pncp_id,
         title: item.title,
         organization_name: item.organization_name,
