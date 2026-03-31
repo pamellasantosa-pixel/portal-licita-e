@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/pncp-search.js": {
+      "maxDuration": 30
+    }
+  },
   "crons": [
     {
       "path": "/api/cron-reminders",

@@ -1,0 +1,248 @@
+import { isDateWithinRange, logStructured, uniqBy, withRetry } from "./common.js";
+import { z } from "zod";
+
+const SOURCE = "pncp";
+const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
+const PAGE_SIZE = 50;
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * @typedef {Object} EditalItem
+ * @property {string} titulo
+ * @property {string} link
+ * @property {string} orgao
+ * @property {string | null} data
+ * @property {string[]} chaves
+ */
+
+const pncpItemSchema = z.object({
+  numeroControlePNCP: z.union([z.string(), z.number()]).transform((value) => String(value)),
+  objetoCompra: z.string().min(1),
+  dataPublicacaoPncp: z.string().min(1),
+  orgaoEntidade: z.object({
+    razaoSocial: z.string().min(1)
+  }),
+  valorTotalEstimado: z.union([z.number(), z.string()]),
+  linkSistemaOrigem: z.string().default(""),
+  modalidadeNome: z.string().default(""),
+  situacaoCompraNome: z.string().default("")
+});
+
+const pncpResponseSchema = z
+  .union([
+    z.array(z.unknown()),
+    z
+      .object({ itens: z.array(z.unknown()).nullable().optional() })
+      .refine((p) => "itens" in p)
+      .transform((p) => (Array.isArray(p.itens) ? p.itens : [])),
+    z
+      .object({ data: z.array(z.unknown()).nullable().optional() })
+      .refine((p) => "data" in p)
+      .transform((p) => (Array.isArray(p.data) ? p.data : []))
+  ])
+  .transform((items) => items.map((item) => normalizeIncomingItem(item)))
+  .pipe(z.array(pncpItemSchema));
+
+function getRequestTimeoutMs() {
+  const fromEnv = Number(process.env.PNCP_REQUEST_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    return Math.floor(fromEnv);
+  }
+
+  return REQUEST_TIMEOUT_MS;
+}
+
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable_payload]";
+  }
+}
+
+function normalizeIncomingItem(item) {
+  const source = item && typeof item === "object" ? item : {};
+  const orgaoEntidade = source.orgaoEntidade || source.orgao_entidade || {};
+  const razaoSocial =
+    orgaoEntidade.razaoSocial ||
+    orgaoEntidade.razao_social ||
+    source.orgao_nome ||
+    source.unidadeOrgao?.nomeUnidade ||
+    undefined;
+
+  return {
+    numeroControlePNCP: source.numeroControlePNCP ?? source.numero_controle_pncp,
+    objetoCompra: source.objetoCompra ?? source.objeto_compra ?? source.objeto,
+    dataPublicacaoPncp: source.dataPublicacaoPncp ?? source.data_publicacao_pncp ?? source.dataPublicacao,
+    orgaoEntidade: {
+      razaoSocial
+    },
+    valorTotalEstimado: source.valorTotalEstimado ?? source.valor_total_estimado,
+    linkSistemaOrigem:
+      source.linkSistemaOrigem ??
+      source.link_sistema_origem ??
+      source.item_url ??
+      source.linkProcessoEletronico ??
+      source.url ??
+      undefined,
+    modalidadeNome: source.modalidadeNome ?? source.modalidade_nome ?? undefined,
+    situacaoCompraNome: source.situacaoCompraNome ?? source.situacao_compra_nome ?? undefined
+  };
+}
+
+function normalizePayload(payload) {
+  const result = pncpResponseSchema.safeParse(payload);
+
+  if (result.success) {
+    return result.data;
+  }
+
+  const issues = result.error.issues.map((issue) => ({
+    path: issue.path.join("."),
+    message: issue.message,
+    code: issue.code
+  }));
+
+  logStructured("error", SOURCE, "invalid_payload", {
+    issues,
+    receivedStructure: safeStringify(payload)
+  });
+
+  throw new Error(`pncp_payload_validation_failed:${safeStringify(issues)}`);
+}
+
+function resolvePncpUrl(item = {}) {
+  const path = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
+  if (!path) return "https://pncp.gov.br/app/editais?pagina=1";
+  if (/^https?:\/\//i.test(path)) return path;
+  return `https://pncp.gov.br${path}`;
+}
+
+function normalizeKeywordForQuery(keyword) {
+  const normalized = String(keyword || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+
+  return encodeURIComponent(normalized);
+}
+
+async function fetchByKeywordPage(keyword, page, pageSize, timeoutMs) {
+  const encodedKeyword = normalizeKeywordForQuery(keyword);
+  const query = new URLSearchParams({
+    tipos_documento: "edital",
+    status: "recebendo_proposta",
+    pagina: String(page),
+    tamanhoPagina: String(pageSize)
+  });
+
+  const url = `${PNCP_SEARCH_URL}?${query.toString()}&q=${encodedKeyword}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await globalThis.fetch(url, {
+      headers: { "User-Agent": "Licita-E/1.0 (PNCP Adapter)" },
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`pncp_timeout_${timeoutMs}ms`);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    throw new Error(`pncp_http_${response.status}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  logStructured("info", SOURCE, "raw_payload_keys", { keys: Object.keys(payload ?? {}), isArray: Array.isArray(payload), firstItemKeys: Array.isArray(payload?.data) && payload.data[0] ? Object.keys(payload.data[0]) : [] });
+  return normalizePayload(payload);
+}
+
+/**
+ * @param {string} keyword
+ * @param {string | Date | null} dateFrom
+ * @param {string | Date | null} dateTo
+ * @returns {Promise<EditalItem[]>}
+ */
+async function fetchByKeyword(keyword, dateFrom, dateTo) {
+  const timeoutMs = getRequestTimeoutMs();
+  const items = [];
+  let page = 1;
+
+  while (true) {
+    const pageItems = await fetchByKeywordPage(keyword, page, PAGE_SIZE, timeoutMs);
+    items.push(...pageItems);
+
+    if (pageItems.length < PAGE_SIZE) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  return items
+    .map((item) => {
+      const date = item.dataPublicacaoPncp || null;
+      return {
+        titulo: item.objetoCompra || "Sem titulo",
+        link: resolvePncpUrl(item),
+        orgao: item.orgaoEntidade?.razaoSocial || "Orgao nao informado",
+        data: date,
+        chaves: [keyword]
+      };
+    })
+    .filter((item) => isDateWithinRange(item.data, dateFrom, dateTo));
+}
+
+/**
+ * Busca editais no PNCP com execucao resiliente.
+ * @param {string[]} keywords
+ * @param {string | Date | null} dateFrom
+ * @param {string | Date | null} dateTo
+ * @returns {Promise<EditalItem[]>}
+ */
+export async function fetch(keywords = [], dateFrom = null, dateTo = null) {
+  const terms = Array.isArray(keywords) ? keywords.filter(Boolean).slice(0, 20) : [];
+  if (terms.length === 0) {
+    logStructured("warn", SOURCE, "empty_keywords", {});
+    return [];
+  }
+
+  logStructured("info", SOURCE, "start", { terms: terms.length });
+
+  const rows = [];
+  const errors = [];
+
+  for (const keyword of terms) {
+    try {
+      const byKeyword = await withRetry(() => fetchByKeyword(keyword, dateFrom, dateTo), {
+        source: SOURCE,
+        operationName: "fetch_by_keyword"
+      });
+      rows.push(...byKeyword);
+    } catch (error) {
+      const reason = String(error?.message || error);
+      errors.push({ keyword, reason });
+      logStructured("error", SOURCE, "keyword_failed", { keyword, reason });
+    }
+  }
+
+  if (rows.length === 0 && errors.length > 0) {
+    if (errors.length === 1) {
+      throw new Error(`pncp_all_keywords_failed:1:${errors[0].reason}`);
+    }
+
+    throw new Error(`pncp_all_keywords_failed:${errors.length}`);
+  }
+
+  const deduped = uniqBy(rows, (item) => `${item.link}|${item.titulo}`);
+  logStructured("info", SOURCE, "done", { total: deduped.length, failedKeywords: errors.length });
+  return deduped;
+}

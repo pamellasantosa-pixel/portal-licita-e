@@ -1,0 +1,6 @@
+# Exclude exploratory scripts from deployment
+scripts/
+
+# Exclude Python files from deployment
+*.py
+**/*.py

@@ -10,7 +10,82 @@ import ScoreReasonBadge from "../components/ScoreReasonBadge";
 
 const AUTO_SYNC_KEY = "licitae_dashboard_last_auto_sync";
 const AUTO_SYNC_INTERVAL_MS = 1000 * 60 * 60 * 3; // 3 horas
+const HEALTH_REFRESH_MS = 1000 * 60 * 5; // 5 minutos
+const SEARCH_CATEGORY_OPTIONS = [
+  { value: "ambiental", label: "Ambiental" },
+  { value: "social", label: "Social" },
+  { value: "combinados", label: "Combinados" }
+];
 
+const HEALTH_LABELS = {
+  pncp: "PNCP",
+  compras: "Compras.gov",
+  google: "Google CSE",
+  bll: "BLL"
+};
+
+/**
+ * @param {{ source: { sourceName?: string, status?: string, failureCount?: number } }} props
+ * @returns {JSX.Element}
+ */
+function SourceHealthBadge({ source }) {
+  const status = String(source?.status || "CLOSED").toUpperCase();
+
+  let tone = "bg-emerald-100 text-emerald-800 border-emerald-300";
+  if (status === "HALF_OPEN") {
+    tone = "bg-amber-100 text-amber-800 border-amber-300";
+  }
+  if (status === "OPEN") {
+    tone = "bg-red-100 text-red-800 border-red-300";
+  }
+
+  const name = HEALTH_LABELS[source?.sourceName] || source?.sourceName || "Fonte";
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${tone}`}>
+      <p className="font-heading text-xs uppercase tracking-wider">{name}</p>
+      <p className="font-body text-sm font-semibold">{status}</p>
+      <p className="font-body text-xs opacity-80">Falhas: {Number(source?.failureCount || 0)}</p>
+    </div>
+  );
+}
+
+/**
+ * @param {{
+ * selectedCategories: Array<"ambiental" | "social" | "combinados">,
+ * onToggleCategory: (category: "ambiental" | "social" | "combinados") => void
+ * }} props
+ * @returns {JSX.Element}
+ */
+function FilterPanel({ selectedCategories, onToggleCategory }) {
+  return (
+    <section className="rounded-2xl border border-brand-brown/10 bg-white p-5 shadow-panel">
+      <h2 className="font-heading text-lg text-brand-brown">Filtro de palavras-chave</h2>
+      <p className="mt-1 font-body text-sm text-brand-ink/75">Selecione categorias para enriquecer as buscas nas fontes.</p>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        {SEARCH_CATEGORY_OPTIONS.map((option) => {
+          const checked = selectedCategories.includes(option.value);
+          return (
+            <label key={option.value} className="flex items-center gap-2 rounded-lg border border-brand-brown/15 px-3 py-2 font-body text-sm text-brand-ink">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => onToggleCategory(option.value)}
+                className="h-4 w-4 rounded border-brand-brown/40 text-brand-cyan focus:ring-brand-cyan"
+              />
+              <span>{option.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * @param {string | number | Date} dateLike
+ * @returns {string}
+ */
 function dateToBrazilian(dateLike) {
   return new Intl.DateTimeFormat("pt-BR", {
     dateStyle: "short",
@@ -18,6 +93,9 @@ function dateToBrazilian(dateLike) {
   }).format(new Date(dateLike));
 }
 
+/**
+ * @returns {JSX.Element}
+ */
 export default function DashboardPage() {
   const [bids, setBids] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -25,9 +103,28 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState([]);
   const [period, setPeriod] = useState("30dias");
-  const [category, setCategory] = useState("todas");
+  const [statusCategory, setStatusCategory] = useState("todas");
+  const [selectedSearchCategories, setSelectedSearchCategories] = useState(["ambiental", "social", "combinados"]);
+  const [sourceHealth, setSourceHealth] = useState([]);
+
+  /**
+   * @param {"ambiental" | "social" | "combinados"} category
+   * @returns {void}
+   */
+  function handleToggleSearchCategory(category) {
+    setSelectedSearchCategories((current) => {
+      if (current.includes(category)) {
+        return current.filter((item) => item !== category);
+      }
+      return [...current, category];
+    });
+  }
 
   useEffect(() => {
+    /**
+     * Carrega dados iniciais do dashboard e executa auto-sync quando necessario.
+     * @returns {Promise<void>}
+     */
     async function loadData() {
       try {
         setIsLoading(true);
@@ -42,7 +139,9 @@ export default function DashboardPage() {
         if (shouldAutoSync) {
           setIsSyncing(true);
           const customKeywords = await getActiveKeywords().catch(() => []);
-          const result = await syncPncBids(customKeywords);
+          const result = await syncPncBids(customKeywords, {
+            categories: selectedSearchCategories
+          });
           if (result.warnings?.length) {
             setWarnings(result.warnings);
           }
@@ -61,6 +160,40 @@ export default function DashboardPage() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    /**
+     * Consulta a saude das fontes no endpoint de monitoramento.
+     * @returns {Promise<void>}
+     */
+    async function fetchHealth() {
+      try {
+        const response = await fetch("/api/health", {
+          headers: { Accept: "application/json" }
+        });
+        if (!response.ok) {
+          throw new Error(`health_http_${response.status}`);
+        }
+
+        const payload = await response.json().catch(() => ({}));
+        if (!isMounted) return;
+        setSourceHealth(Array.isArray(payload.sources) ? payload.sources : []);
+      } catch {
+        if (!isMounted) return;
+        setSourceHealth([]);
+      }
+    }
+
+    fetchHealth();
+    const timer = setInterval(fetchHealth, HEALTH_REFRESH_MS);
+
+    return () => {
+      isMounted = false;
+      clearInterval(timer);
+    };
+  }, []);
+
   const stats = useMemo(() => {
     const total = bids.length;
     const emAnalise = bids.filter((item) => item.status === "em_analise").length;
@@ -69,13 +202,18 @@ export default function DashboardPage() {
     return { total, emAnalise, favoritados };
   }, [bids]);
 
+  /**
+   * @returns {Promise<void>}
+   */
   async function handleSync() {
     try {
       setIsSyncing(true);
       setError("");
       setWarnings([]);
       const customKeywords = await getActiveKeywords().catch(() => []);
-      const result = await syncPncBids(customKeywords);
+      const result = await syncPncBids(customKeywords, {
+        categories: selectedSearchCategories
+      });
       if (result.warnings?.length) {
         setWarnings(result.warnings);
       }
@@ -88,6 +226,9 @@ export default function DashboardPage() {
     }
   }
 
+  /**
+   * @returns {Promise<void>}
+   */
   async function handleSignOut() {
     const supabase = getSupabaseClientOrThrow();
     await supabase.auth.signOut();
@@ -108,12 +249,12 @@ export default function DashboardPage() {
       result = result.filter((item) => new Date(item.published_date) >= start);
     }
 
-    if (category !== "todas") {
-      result = result.filter((item) => item.status === category);
+    if (statusCategory !== "todas") {
+      result = result.filter((item) => item.status === statusCategory);
     }
 
     return result;
-  }, [bids, period, category]);
+  }, [bids, period, statusCategory]);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-brand-sand via-[#FFFDFB] to-[#F2F8F9] px-6 py-8">
@@ -156,6 +297,21 @@ export default function DashboardPage() {
           </article>
         </section>
 
+        <section className="rounded-2xl border border-brand-brown/10 bg-white p-5 shadow-panel">
+          <h2 className="font-heading text-lg text-brand-brown">Saude das fontes</h2>
+          {sourceHealth.length === 0 ? (
+            <p className="mt-2 font-body text-sm text-brand-ink/70">Sem dados de saude no momento.</p>
+          ) : (
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
+              {sourceHealth.map((source) => (
+                <SourceHealthBadge key={source.sourceName} source={source} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <FilterPanel selectedCategories={selectedSearchCategories} onToggleCategory={handleToggleSearchCategory} />
+
         <section className="grid gap-3 rounded-2xl border border-brand-brown/10 bg-white p-4 shadow-panel md:grid-cols-2">
           <label className="font-body text-sm text-brand-ink">
             Periodo
@@ -172,8 +328,8 @@ export default function DashboardPage() {
           <label className="font-body text-sm text-brand-ink">
             Categoria
             <select
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
+              value={statusCategory}
+              onChange={(event) => setStatusCategory(event.target.value)}
               className="mt-1 w-full rounded-xl border border-brand-brown/20 px-3 py-2"
             >
               <option value="todas">Todas</option>
