@@ -1,8 +1,13 @@
 {
   "functions": {
-    "api/pncp-search.js": {
-      "maxDuration": 30
-    }
+    "api/pncp-search.js": { "maxDuration": 30 },
+    "api/analyze-edital.js": { "maxDuration": 30 },
+    "api/multi-source-search.js": { "maxDuration": 30 },
+    "api/pncp-enrich.js": { "maxDuration": 30 },
+    "api/health.js": { "maxDuration": 10 },
+    "api/cron-bid-enrichment.js": { "maxDuration": 30 },
+    "api/cron-reminders.js": { "maxDuration": 30 },
+    "api/pncp-open.js": { "maxDuration": 30 }
   },
   "crons": [
     {
@@ -11,7 +16,7 @@
     },
     {
       "path": "/api/cron-bid-enrichment",
-      "schedule": "*/30 * * * *"
+      "schedule": "0 8 * * *"
     }
   ],
   "routes": [

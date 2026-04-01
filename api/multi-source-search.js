@@ -1,5 +1,5 @@
-import { fetchComprasGovOpenBidsByKeywords } from "./_shared/compras-api-service.js";
-import { validateDocumentLink } from "./_shared/link-validation.js";
+import { fetchComprasGovOpenBidsByKeywords } from "../server/_shared/compras-api-service.js";
+import { validateDocumentLink } from "../server/_shared/link-validation.js";
 
 const PNCP_SEARCH_URL = "https://pncp.gov.br/api/search";
 

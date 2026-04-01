@@ -7,8 +7,8 @@
   PROJECT_TERMS,
   REQUIRED_TERMS,
   TARGET_ORGS
-} from "./_shared/filters.js";
-import { extractPdfTextFromUrl } from "./_shared/pdf-content-service.js";
+} from "../server/_shared/filters.js";
+import { extractPdfTextFromUrl } from "../server/_shared/pdf-content-service.js";
 import { evaluateEsaScore, evaluatePdfTextRelevanceGate } from "../src/lib/esaScoring.js";
 
 function normalizeText(value) {

@@ -16,32 +16,17 @@ const REQUEST_TIMEOUT_MS = 10_000;
  */
 
 const pncpItemSchema = z.object({
-  numeroControlePNCP: z.union([z.string(), z.number()]).transform((value) => String(value)),
-  objetoCompra: z.string().min(1),
-  dataPublicacaoPncp: z.string().min(1),
+  numeroControlePNCP: z.union([z.string(), z.number()]).optional().default("").transform((value) => String(value)),
+  objetoCompra: z.string().optional().default(""),
+  dataPublicacaoPncp: z.string().optional().default(""),
   orgaoEntidade: z.object({
-    razaoSocial: z.string().min(1)
-  }),
-  valorTotalEstimado: z.union([z.number(), z.string()]),
-  linkSistemaOrigem: z.string().default(""),
-  modalidadeNome: z.string().default(""),
-  situacaoCompraNome: z.string().default("")
+    razaoSocial: z.string().optional().default("")
+  }).optional().default({ razaoSocial: "" }),
+  valorTotalEstimado: z.union([z.number(), z.string()]).nullable().optional().default(0),
+  linkSistemaOrigem: z.string().optional().default(""),
+  modalidadeNome: z.string().optional().default(""),
+  situacaoCompraNome: z.string().optional().default("")
 });
-
-const pncpResponseSchema = z
-  .union([
-    z.array(z.unknown()),
-    z
-      .object({ itens: z.array(z.unknown()).nullable().optional() })
-      .refine((p) => "itens" in p)
-      .transform((p) => (Array.isArray(p.itens) ? p.itens : [])),
-    z
-      .object({ data: z.array(z.unknown()).nullable().optional() })
-      .refine((p) => "data" in p)
-      .transform((p) => (Array.isArray(p.data) ? p.data : []))
-  ])
-  .transform((items) => items.map((item) => normalizeIncomingItem(item)))
-  .pipe(z.array(pncpItemSchema));
 
 function getRequestTimeoutMs() {
   const fromEnv = Number(process.env.PNCP_REQUEST_TIMEOUT_MS);
@@ -64,20 +49,20 @@ function normalizeIncomingItem(item) {
   const source = item && typeof item === "object" ? item : {};
   const orgaoEntidade = source.orgaoEntidade || source.orgao_entidade || {};
   const razaoSocial =
-    orgaoEntidade.razaoSocial ||
-    orgaoEntidade.razao_social ||
-    source.orgao_nome ||
-    source.unidadeOrgao?.nomeUnidade ||
-    undefined;
+    orgaoEntidade.razaoSocial ??
+    orgaoEntidade.razao_social ??
+    source.orgao_nome ??
+    source.unidadeOrgao?.nomeUnidade ??
+    source.unidade_nome;
 
   return {
     numeroControlePNCP: source.numeroControlePNCP ?? source.numero_controle_pncp,
-    objetoCompra: source.objetoCompra ?? source.objeto_compra ?? source.objeto,
+    objetoCompra: source.objetoCompra ?? source.objeto_compra ?? source.description ?? source.title ?? source.objeto,
     dataPublicacaoPncp: source.dataPublicacaoPncp ?? source.data_publicacao_pncp ?? source.dataPublicacao,
     orgaoEntidade: {
       razaoSocial
     },
-    valorTotalEstimado: source.valorTotalEstimado ?? source.valor_total_estimado,
+    valorTotalEstimado: source.valorTotalEstimado ?? source.valor_total_estimado ?? source.valor_global ?? 0,
     linkSistemaOrigem:
       source.linkSistemaOrigem ??
       source.link_sistema_origem ??
@@ -90,25 +75,35 @@ function normalizeIncomingItem(item) {
   };
 }
 
-function normalizePayload(payload) {
-  const result = pncpResponseSchema.safeParse(payload);
-
-  if (result.success) {
-    return result.data;
+function extractItems(payload) {
+  if (Array.isArray(payload)) {
+    return payload;
   }
 
-  const issues = result.error.issues.map((issue) => ({
-    path: issue.path.join("."),
-    message: issue.message,
-    code: issue.code
-  }));
+  if (Array.isArray(payload?.data)) {
+    return payload.data;
+  }
 
-  logStructured("error", SOURCE, "invalid_payload", {
-    issues,
-    receivedStructure: safeStringify(payload)
+  if (Array.isArray(payload?.itens)) {
+    return payload.itens;
+  }
+
+  if (Array.isArray(payload?.items)) return payload.items;
+
+  logStructured("warn", SOURCE, "unknown_payload_shape", {
+    keys: Object.keys(payload ?? {})
   });
 
-  throw new Error(`pncp_payload_validation_failed:${safeStringify(issues)}`);
+  return [];
+}
+
+function isValidRawPncpItem(item) {
+  if (!item || typeof item !== "object") return false;
+  return !!(
+    (item.numero_controle_pncp || item.numeroControlePNCP) &&
+    (item.description || item.title || item.objetoCompra || item.objeto_compra) &&
+    (item.data_publicacao_pncp || item.dataPublicacaoPncp)
+  );
 }
 
 function resolvePncpUrl(item = {}) {
@@ -161,8 +156,14 @@ async function fetchByKeywordPage(keyword, page, pageSize, timeoutMs) {
   }
 
   const payload = await response.json().catch(() => ({}));
-  logStructured("info", SOURCE, "raw_payload_keys", { keys: Object.keys(payload ?? {}), isArray: Array.isArray(payload), firstItemKeys: Array.isArray(payload?.data) && payload.data[0] ? Object.keys(payload.data[0]) : [] });
-  return normalizePayload(payload);
+  const rawItems = extractItems(payload).filter((item) => item && typeof item === "object");
+
+  const items = rawItems
+    .filter((item) => isValidRawPncpItem(item))
+    .map((item) => normalizeIncomingItem(item))
+    .map((item) => pncpItemSchema.parse(item));
+
+  return items;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { validateDocumentLink } from "./_shared/link-validation.js";
+import { validateDocumentLink } from "../server/_shared/link-validation.js";
 
 const ASYNC_EXSA_TERMS = ["socioambiental", "quilombola", "indigena", "clpi", "consulta previa", "diagnostico"];
 

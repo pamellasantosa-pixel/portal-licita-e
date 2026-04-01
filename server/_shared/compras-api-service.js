@@ -1,4 +1,6 @@
-const COMPRAS_GOV_API_BASE_URL = process.env.COMPRAS_GOV_API_BASE_URL || "https://api.compras.gov.br/licitacoes/v1/licitacoes";
+const COMPRAS_GOV_API_BASE_URL =
+  process.env.COMPRAS_GOV_API_BASE_URL ||
+  "https://dadosabertos.compras.gov.br/modulo-legado/1_consultarLicitacao";
 
 function normalizeText(value) {
   return String(value || "")
@@ -12,6 +14,22 @@ function firstNonEmpty(values) {
     if (value != null && String(value).trim() !== "") return String(value).trim();
   }
   return "";
+}
+
+function formatDateISO(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  return d.toISOString().slice(0, 10);
+}
+
+function buildRecentDateRanges(days = 14) {
+  const ranges = [];
+  for (let i = 0; i < days; i += 1) {
+    const day = new Date();
+    day.setDate(day.getDate() - i);
+    const iso = formatDateISO(day);
+    ranges.push({ start: iso, end: iso });
+  }
+  return ranges;
 }
 
 function normalizePayload(payload) {
@@ -44,7 +62,9 @@ function normalizeStatus(item = {}) {
 
 function isStatusOpen(item = {}) {
   const status = normalizeStatus(item);
-  return status.includes("aberto") || status.includes("em andamento") || status.includes("recebendo proposta");
+  if (!status) return true;
+  const closed = ["encerrado", "cancelado", "revogado", "anulado", "homologado", "deserto", "fracassado"];
+  return !closed.some((term) => status.includes(term));
 }
 
 function mapComprasItem(item) {
@@ -80,40 +100,55 @@ function mapComprasItem(item) {
 export async function fetchComprasGovOpenBidsByKeywords(keywords = [], { timeoutMs = 10000, pageSize = 50 } = {}) {
   const terms = Array.isArray(keywords) ? keywords.filter(Boolean).slice(0, 30) : [];
   const rows = [];
+  const safePageSize = Math.max(10, Number(pageSize) || 10);
+  const dateRanges = buildRecentDateRanges(14);
 
   for (const keyword of terms) {
-    const params = new URLSearchParams({
-      termo: keyword,
-      pagina: "1",
-      tamanhoPagina: String(pageSize)
-    });
+    let foundForKeyword = false;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetch(`${COMPRAS_GOV_API_BASE_URL}?${params.toString()}`, {
-        method: "GET",
-        headers: { "User-Agent": "Licita-E/1.0" },
-        signal: controller.signal
+    for (const range of dateRanges) {
+      const params = new URLSearchParams({
+        pagina: "1",
+        tamanhoPagina: String(safePageSize),
+        data_publicacao_inicial: range.start,
+        data_publicacao_final: range.end
       });
 
-      if (!response.ok) continue;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      const payload = await response.json().catch(() => null);
-      const items = normalizePayload(payload)
-        .filter((item) => isStatusOpen(item))
-        .map(mapComprasItem)
-        .filter((item) => {
-          const corpus = `${item.title} ${item.description}`;
-          return hasExactKeyword(item.title, keyword) || hasExactKeyword(corpus, keyword);
+      try {
+        const response = await fetch(`${COMPRAS_GOV_API_BASE_URL}?${params.toString()}`, {
+          method: "GET",
+          headers: { "User-Agent": "Licita-E/1.0" },
+          signal: controller.signal
         });
 
-      rows.push(...items);
-    } catch {
-      // ignora falha pontual por keyword
-    } finally {
-      clearTimeout(timer);
+        if (!response.ok) continue;
+
+        const payload = await response.json().catch(() => null);
+        const items = normalizePayload(payload)
+          .filter((item) => isStatusOpen(item))
+          .map(mapComprasItem)
+          .filter((item) => {
+            const corpus = `${item.title} ${item.description}`;
+            return hasExactKeyword(item.title, keyword) || hasExactKeyword(corpus, keyword);
+          });
+
+        if (items.length > 0) {
+          rows.push(...items);
+          foundForKeyword = true;
+          break;
+        }
+      } catch {
+        // ignora falha pontual por keyword/faixa de data
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    if (!foundForKeyword) {
+      continue;
     }
   }
 

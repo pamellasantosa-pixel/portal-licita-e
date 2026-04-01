@@ -5,7 +5,7 @@ import { server } from "./setup.js";
 const createClientMock = vi.hoisted(() => vi.fn());
 const bllFetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../api/sources/common.js", async (importOriginal) => {
+vi.mock("../server/sources/common.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -17,7 +17,7 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: createClientMock
 }));
 
-vi.mock("../api/sources/bll-adapter.js", () => ({
+vi.mock("../server/sources/bll-adapter.js", () => ({
   fetch: bllFetchMock
 }));
 

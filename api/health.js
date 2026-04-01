@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { loadSourceHealthMap } from "./lib/circuit-breaker.js";
+import { loadSourceHealthMap } from "../server/lib/circuit-breaker.js";
 
 const DEFAULT_SOURCES = ["pncp", "compras", "google", "bll"];
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../api/sources/common.js", async (importOriginal) => {
+vi.mock("../server/sources/common.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -8,7 +8,7 @@ vi.mock("../api/sources/common.js", async (importOriginal) => {
   };
 });
 
-const { fetch: fetchPncp } = await import("../api/sources/pncp-adapter.js");
+const { fetch: fetchPncp } = await import("../server/sources/pncp-adapter.js");
 
 function buildPncpItem(index, overrides = {}) {
   return {
@@ -80,7 +80,8 @@ describe("pncp-adapter", () => {
       .fn()
       .mockResolvedValue(mockJsonResponse({ data: [{ objetoCompra: "Sem campos obrigatorios" }] }));
 
-    await expect(fetchPncp(["infra"], null, null)).rejects.toThrow(/pncp_payload_validation_failed/);
+    const result = await fetchPncp(["infra"], null, null);
+    expect(result).toEqual([]);
   });
 
   it("lanca erro de timeout em 10s configuravel por request", async () => {

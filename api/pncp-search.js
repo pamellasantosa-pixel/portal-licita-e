@@ -11,15 +11,15 @@ import {
   PRIORITY_TERRITORIES,
   PROJECT_TERMS,
   TARGET_ORGS
-} from "./_shared/filters.js";
-import { fetchComprasGovOpenBidsByKeywords } from "./_shared/compras-api-service.js";
-import { validateDocumentLink } from "./_shared/link-validation.js";
-import { fetch as fetchPncp } from "./sources/pncp-adapter.js";
-import { fetch as fetchComprasGov } from "./sources/compras-gov-adapter.js";
-import { fetch as fetchSerper } from "./sources/serper-adapter.js";
-import { fetch as fetchBll } from "./sources/bll-adapter.js";
+} from "../server/_shared/filters.js";
+import { fetchComprasGovOpenBidsByKeywords } from "../server/_shared/compras-api-service.js";
+import { validateDocumentLink } from "../server/_shared/link-validation.js";
+import { fetch as fetchPncp } from "../server/sources/pncp-adapter.js";
+import { fetch as fetchComprasGov } from "../server/sources/compras-gov-adapter.js";
+import { fetch as fetchSerper } from "../server/sources/serper-adapter.js";
+import { fetch as fetchBll } from "../server/sources/bll-adapter.js";
 
-import { createCircuitBreakers, persistCircuitState } from "./lib/circuit-breaker.js";
+import { createCircuitBreakers, persistCircuitState } from "../server/lib/circuit-breaker.js";
 
 export const config = { api: { bodyParser: true } };
 
@@ -35,7 +35,7 @@ const SOURCE_BREAKER_CONFIGS = SOURCE_ORDER.map((name) => ({
  * Executa uma fonte protegida por circuit breaker e persiste estado atualizado.
  * @template T
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {import("./lib/circuit-breaker.js").CircuitBreaker} breaker
+ * @param {import("../server/lib/circuit-breaker.js").CircuitBreaker} breaker
  * @param {() => Promise<T>} operation
  * @returns {Promise<T>}
  */
@@ -55,7 +55,7 @@ async function runWithCircuit(supabase, breaker, operation) {
 /**
  * Gera identificador estavel para upsert no Supabase.
  * @param {{url: string}} item
- * @returns {string}
+ * @returns {string} 
  */
 function buildStableId(item) {
   const payload = canonicalizeUrl(item.url);
@@ -65,7 +65,7 @@ function buildStableId(item) {
 /**
  * Normaliza resultado de qualquer fonte para o schema unificado.
  * @param {"pncp"|"compras"|"serper"|"bll"} source
- * @param {Record<string, unknown>} row
+ * @param {Record<string, unknown>} row 
  * @returns {{title: string, url: string, organ: string, date: string | null, keywords: string[], source: "pncp"|"compras"|"serper"|"bll"}}
  */
 function normalizeSourceRow(source, row) {
@@ -115,7 +115,7 @@ function normalizeSourceRow(source, row) {
 /**
  * Construi assinatura canonica de URL para deduplicacao cross-source.
  * @param {string} url
- * @returns {string}
+ * @returns {string} 
  */
 function canonicalizeUrl(url) {
   try {
@@ -131,7 +131,7 @@ function canonicalizeUrl(url) {
 /**
  * Determina se o texto representa um valor util, desconsiderando placeholders comuns.
  * @param {string | null | undefined} value
- * @returns {boolean}
+ * @returns {boolean} 
  */
 function hasMeaningfulText(value) {
   const normalized = String(value || "").trim().toLowerCase();
@@ -144,7 +144,7 @@ function hasMeaningfulText(value) {
 /**
  * Calcula score de completude para decidir qual registro manter ao deduplicar.
  * @param {{title: string, url: string, organ: string, date: string | null, keywords: string[]}} row
- * @returns {number}
+ * @returns {number} 
  */
 function getCompletenessScore(row) {
   let score = 0;
@@ -160,7 +160,7 @@ function getCompletenessScore(row) {
  * Consolida origens em CSV com ordem estavel.
  * @param {string} sourceA
  * @param {string} sourceB
- * @returns {string}
+ * @returns {string} 
  */
 function mergeSources(sourceA, sourceB) {
   const values = new Set(
@@ -179,7 +179,7 @@ function mergeSources(sourceA, sourceB) {
  * Remove itens vazios e normaliza lista para persistencia.
  * @param {Array<{title: string, url: string, organ: string, date: string | null, keywords: string[], source: string}>} rows
  * @returns {Array<{title: string, url: string, organ: string, date: string | null, keywords: string[], source: string}>}
- */
+ */ 
 function sanitizeRows(rows) {
   const unique = new Map();
 
@@ -215,7 +215,7 @@ function sanitizeRows(rows) {
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
  * @param {Array<{title: string, url: string, organ: string, date: string | null, keywords: string[], source: string}>} rows
  * @returns {Promise<number>}
- */
+ */ 
 async function persistFulfilledRows(supabase, rows) {
   if (!rows.length) return 0;
 
@@ -232,8 +232,16 @@ async function persistFulfilledRows(supabase, rows) {
       portal_origin: item.source,
       source_url: item.url,
       link_edital: item.url,
-      published_date: item.date || new Date().toISOString(),
-      data_abertura: item.date || null,
+      published_date: (() => {
+        const raw = item.date || "";
+        const d = new Date(raw);
+        return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+      })(),
+      data_abertura: (() => {
+        if (!item.date) return null;
+        const d = new Date(item.date);
+        return isNaN(d.getTime()) ? null : d.toISOString();
+      })(),
       status: "em_analise",
       objeto_descricao: item.title
     };
@@ -252,10 +260,8 @@ async function persistFulfilledRows(supabase, rows) {
  * @param {import("http").IncomingMessage & { method?: string, body?: any }} req
  * @param {{ status: (code: number) => { json: (body: any) => any } }} res
  * @returns {Promise<any>}
- */
+ */ 
 export default async function handler(req, res) {
-  console.log("=== DEBUG HEADERS ===", req.headers?.["content-type"]);
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -274,13 +280,9 @@ export default async function handler(req, res) {
   const safeDateFrom = dateFrom || body?.from || null;
   const safeDateTo = dateTo || body?.to || null;
 
-  console.log("keywords recebidas:", safeKeywords, "dateFrom:", safeDateFrom, "dateTo:", safeDateTo);
-
   if (!safeKeywords.length) {
     return res.status(400).json({ error: "keywords obrigatorio" });
   }
-
-  console.log("=== DEBUG BODY ===", JSON.stringify(req.body));
 
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
   const breakers = await createCircuitBreakers(supabase, SOURCE_BREAKER_CONFIGS);
