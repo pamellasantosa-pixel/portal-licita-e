@@ -16,7 +16,7 @@ const handlers = [
       ]
     });
   }),
-  http.get("https://api.compras.gov.br/licitacoes/v1/licitacoes", () => {
+  http.get("https://compras.dados.gov.br/licitacoes/v1/licitacoes.json", () => {
     return HttpResponse.json({
       _embedded: {
         licitacoes: [

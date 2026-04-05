@@ -94,7 +94,7 @@ function installSuccessHandlers() {
 
       return HttpResponse.json({ data: [] });
     }),
-    http.get("https://api.compras.gov.br/licitacoes/v1/licitacoes", ({ request }) => {
+    http.get("https://compras.dados.gov.br/licitacoes/v1/licitacoes.json", ({ request }) => {
       const url = new URL(request.url);
       const termo = url.searchParams.get("termo") || "licitacao";
       return HttpResponse.json({
@@ -201,7 +201,7 @@ describe("api/pncp-search integration", () => {
 
     server.use(
       http.get("https://pncp.gov.br/api/search", () => HttpResponse.json({ message: "error" }, { status: 500 })),
-      http.get("https://api.compras.gov.br/licitacoes/v1/licitacoes", () => HttpResponse.json({ message: "error" }, { status: 503 })),
+      http.get("https://compras.dados.gov.br/licitacoes/v1/licitacoes.json", () => HttpResponse.json({ message: "error" }, { status: 503 })),
       http.post("https://google.serper.dev/search", () => HttpResponse.json({ message: "error" }, { status: 502 }))
     );
     bllFetchMock.mockRejectedValue(new Error("bll_all_pages_failed"));

@@ -25,11 +25,48 @@ export const config = { api: { bodyParser: true } };
 
 const SOURCE_ORDER = ["pncp", "compras", "serper", "bll"];
 const GLOBAL_SETTLED_TIMEOUT_MS = 25_000;
+const TARGETED_ORG_CNPJS = [
+  {
+    cnpj: "13114114000105",
+    aliases: ["prefeitura de sao cristovao", "prefeitura municipal de sao cristovao", "sao cristovao"]
+  }
+];
 const SOURCE_BREAKER_CONFIGS = SOURCE_ORDER.map((name) => ({
   name,
   failureThreshold: 3,
   timeout: 60_000
 }));
+
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function detectTargetedCnpj(keywords = []) {
+  const normalizedKeywords = keywords.map((keyword) => normalizeText(keyword));
+
+  for (const entry of TARGETED_ORG_CNPJS) {
+    if (entry.aliases.some((alias) => normalizedKeywords.some((keyword) => keyword.includes(alias)))) {
+      return entry.cnpj;
+    }
+  }
+
+  return "";
+}
+
+function applyTargetedCnpjFilter(rows, targetedCnpj) {
+  if (!targetedCnpj) return rows;
+
+  return rows.filter((row) => {
+    if (row.source !== "pncp") return true;
+
+    const rowCnpj = String(row.cnpj || "").replace(/\D/g, "");
+    const rowUrl = String(row.url || "");
+    return rowCnpj === targetedCnpj || rowUrl.includes(targetedCnpj);
+  });
+}
 
 /**
  * Executa uma fonte protegida por circuit breaker e persiste estado atualizado.
@@ -65,8 +102,8 @@ function buildStableId(item) {
 /**
  * Normaliza resultado de qualquer fonte para o schema unificado.
  * @param {"pncp"|"compras"|"serper"|"bll"} source
- * @param {Record<string, unknown>} row 
- * @returns {{title: string, url: string, organ: string, date: string | null, keywords: string[], source: "pncp"|"compras"|"serper"|"bll"}}
+ * @param {Record<string, u nknown>} row 
+ * @returns {{title: string, url: string, organ: string, cnpj: string, date: string | null, keywords: string[], source: "pncp"|"compras"|"serper"|"bll"}}
  */
 function normalizeSourceRow(source, row) {
   if (source === "pncp") {
@@ -74,6 +111,7 @@ function normalizeSourceRow(source, row) {
       title: String(row.titulo || row.title || "Sem titulo").trim(),
       url: String(row.link || row.url || "").trim(),
       organ: String(row.orgao || row.organ || "Orgao nao informado").trim(),
+      cnpj: String(row.cnpj || row.orgao_cnpj || "").replace(/\D/g, ""),
       date: row.data ? String(row.data) : null,
       keywords: Array.isArray(row.chaves) ? row.chaves.map((v) => String(v)) : [],
       source
@@ -85,6 +123,7 @@ function normalizeSourceRow(source, row) {
       title: String(row.title || row.titulo || "Sem titulo").trim(),
       url: String(row.url || row.link || "").trim(),
       organ: String(row.organ || row.orgao || "Orgao nao informado").trim(),
+      cnpj: String(row.orgao_cnpj || row.cnpj || "").replace(/\D/g, ""),
       date: row.date ? String(row.date) : null,
       keywords: Array.isArray(row.matchedKeywords) ? row.matchedKeywords.map((v) => String(v)) : [],
       source
@@ -96,6 +135,7 @@ function normalizeSourceRow(source, row) {
       title: String(row.name || row.title || "Sem titulo").trim(),
       url: String(row.link || row.url || "").trim(),
       organ: "Serper",
+      cnpj: "",
       date: row.publishDate ? String(row.publishDate) : null,
       keywords: Array.isArray(row.queryKeywords) ? row.queryKeywords.map((v) => String(v)) : [],
       source
@@ -106,6 +146,7 @@ function normalizeSourceRow(source, row) {
     title: String(row.titulo || row.title || "Sem titulo").trim(),
     url: String(row.href || row.url || "").trim(),
     organ: String(row.orgao || row.organ || "BLL").trim(),
+    cnpj: String(row.orgao_cnpj || row.cnpj || "").replace(/\D/g, ""),
     date: row.data ? String(row.data) : null,
     keywords: Array.isArray(row.tags) ? row.tags.map((v) => String(v)) : [],
     source
@@ -143,7 +184,7 @@ function hasMeaningfulText(value) {
 
 /**
  * Calcula score de completude para decidir qual registro manter ao deduplicar.
- * @param {{title: string, url: string, organ: string, date: string | null, keywords: string[]}} row
+ * @param {{title: string, url: string, organ: string, cnpj: string, date: string | null, keywords: string[]}} row
  * @returns {number} 
  */
 function getCompletenessScore(row) {
@@ -177,8 +218,8 @@ function mergeSources(sourceA, sourceB) {
 
 /**
  * Remove itens vazios e normaliza lista para persistencia.
- * @param {Array<{title: string, url: string, organ: string, date: string | null, keywords: string[], source: string}>} rows
- * @returns {Array<{title: string, url: string, organ: string, date: string | null, keywords: string[], source: string}>}
+ * @param {Array<{title: string, url: string, organ: string, cnpj: string, date: string | null, keywords: string[], source: string}>} rows
+ * @returns {Array<{title: string, url: string, organ: string, cnpj: string, date: string | null, keywords: string[], source: string}>}
  */ 
 function sanitizeRows(rows) {
   const unique = new Map();
@@ -203,6 +244,7 @@ function sanitizeRows(rows) {
       source: mergeSources(current.source, row.source),
       title: hasMeaningfulText(keepRow.title) ? keepRow.title : fallbackRow.title,
       organ: hasMeaningfulText(keepRow.organ) ? keepRow.organ : fallbackRow.organ,
+      cnpj: keepRow.cnpj || fallbackRow.cnpj || "",
       date: keepRow.date || fallbackRow.date
     });
   }
@@ -213,7 +255,7 @@ function sanitizeRows(rows) {
 /**
  * Persiste itens normalizados na tabela bids.
  * @param {import("@supabase/supabase-js").SupabaseClient} supabase
- * @param {Array<{title: string, url: string, organ: string, date: string | null, keywords: string[], source: string}>} rows
+ * @param {Array<{title: string, url: string, organ: string, cnpj: string, date: string | null, keywords: string[], source: string}>} rows
  * @returns {Promise<number>}
  */ 
 async function persistFulfilledRows(supabase, rows) {
@@ -227,6 +269,7 @@ async function persistFulfilledRows(supabase, rows) {
       description: item.keywords.join(" | ") || null,
       organization_name: item.organ,
       orgao_nome: item.organ,
+      orgao_cnpj: item.cnpj || null,
       source: item.source,
       source_system: item.source.toUpperCase(),
       portal_origin: item.source,
@@ -279,6 +322,7 @@ export default async function handler(req, res) {
   const safeKeywords = Array.isArray(keywords) ? keywords.filter(Boolean) : [];
   const safeDateFrom = dateFrom || body?.from || null;
   const safeDateTo = dateTo || body?.to || null;
+  const targetedCnpj = detectTargetedCnpj(safeKeywords);
 
   if (!safeKeywords.length) {
     return res.status(400).json({ error: "keywords obrigatorio" });
@@ -367,7 +411,8 @@ export default async function handler(req, res) {
       sourceErrors[sourceKey] = String(result.reason?.message || result.reason || "unknown_error");
     });
 
-    const sanitized = sanitizeRows(normalizedFromFulfilled);
+    const targeted = applyTargetedCnpjFilter(normalizedFromFulfilled, targetedCnpj);
+    const sanitized = sanitizeRows(targeted);
     const elapsedMs = Date.now() - requestStartedAt;
     const remainingMs = Math.max(0, GLOBAL_SETTLED_TIMEOUT_MS - elapsedMs);
 

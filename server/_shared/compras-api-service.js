@@ -1,6 +1,6 @@
 const COMPRAS_GOV_API_BASE_URL =
   process.env.COMPRAS_GOV_API_BASE_URL ||
-  "https://dadosabertos.compras.gov.br/modulo-legado/1_consultarLicitacao";
+  "https://compras.dados.gov.br/licitacoes/v1/licitacoes.json?situacao=1";
 
 function normalizeText(value) {
   return String(value || "")
@@ -16,23 +16,8 @@ function firstNonEmpty(values) {
   return "";
 }
 
-function formatDateISO(value) {
-  const d = value instanceof Date ? value : new Date(value);
-  return d.toISOString().slice(0, 10);
-}
-
-function buildRecentDateRanges(days = 14) {
-  const ranges = [];
-  for (let i = 0; i < days; i += 1) {
-    const day = new Date();
-    day.setDate(day.getDate() - i);
-    const iso = formatDateISO(day);
-    ranges.push({ start: iso, end: iso });
-  }
-  return ranges;
-}
-
 function normalizePayload(payload) {
+  if (Array.isArray(payload?._embedded?.licitacoes)) return payload._embedded.licitacoes;
   if (Array.isArray(payload?.items)) return payload.items;
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.resultado)) return payload.resultado;
@@ -101,54 +86,40 @@ export async function fetchComprasGovOpenBidsByKeywords(keywords = [], { timeout
   const terms = Array.isArray(keywords) ? keywords.filter(Boolean).slice(0, 30) : [];
   const rows = [];
   const safePageSize = Math.max(10, Number(pageSize) || 10);
-  const dateRanges = buildRecentDateRanges(14);
 
   for (const keyword of terms) {
-    let foundForKeyword = false;
+    const requestUrl = new URL(COMPRAS_GOV_API_BASE_URL);
+    requestUrl.searchParams.set("situacao", "1");
+    requestUrl.searchParams.set("termo", keyword);
+    requestUrl.searchParams.set("pagina", "1");
+    requestUrl.searchParams.set("tamanhoPagina", String(safePageSize));
 
-    for (const range of dateRanges) {
-      const params = new URLSearchParams({
-        pagina: "1",
-        tamanhoPagina: String(safePageSize),
-        data_publicacao_inicial: range.start,
-        data_publicacao_final: range.end
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(requestUrl.toString(), {
+        method: "GET",
+        headers: { "User-Agent": "Licita-E/1.0" },
+        signal: controller.signal
       });
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      if (!response.ok) continue;
 
-      try {
-        const response = await fetch(`${COMPRAS_GOV_API_BASE_URL}?${params.toString()}`, {
-          method: "GET",
-          headers: { "User-Agent": "Licita-E/1.0" },
-          signal: controller.signal
+      const payload = await response.json().catch(() => null);
+      const items = normalizePayload(payload)
+        .filter((item) => isStatusOpen(item))
+        .map(mapComprasItem)
+        .filter((item) => {
+          const corpus = `${item.title} ${item.description}`;
+          return hasExactKeyword(item.title, keyword) || hasExactKeyword(corpus, keyword);
         });
 
-        if (!response.ok) continue;
-
-        const payload = await response.json().catch(() => null);
-        const items = normalizePayload(payload)
-          .filter((item) => isStatusOpen(item))
-          .map(mapComprasItem)
-          .filter((item) => {
-            const corpus = `${item.title} ${item.description}`;
-            return hasExactKeyword(item.title, keyword) || hasExactKeyword(corpus, keyword);
-          });
-
-        if (items.length > 0) {
-          rows.push(...items);
-          foundForKeyword = true;
-          break;
-        }
-      } catch {
-        // ignora falha pontual por keyword/faixa de data
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
-    if (!foundForKeyword) {
-      continue;
+      rows.push(...items);
+    } catch {
+      // ignora falha pontual por keyword
+    } finally {
+      clearTimeout(timer);
     }
   }
 

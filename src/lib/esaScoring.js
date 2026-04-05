@@ -23,6 +23,7 @@ const PNCP_EDITAIS_BASE_URL = "https://pncp.gov.br/app/editais";
 
 const PDF_ADHERENCE_TERMS = [
   "quilombola",
+  "diagnostico socioambiental",
   "diagnostico",
   "socioambiental",
   "licenciamento",
@@ -244,13 +245,13 @@ export function evaluatePdfTextRelevanceGate(pdfText) {
 
   const matchedTerms = PDF_ADHERENCE_TERMS.filter((term) => normalized.includes(normalizeText(term)));
 
-  if (matchedTerms.length < 2) {
+  if (matchedTerms.length < 1) {
     return {
       isRelevant: false,
       score: 0,
       matchedTerms,
       status: "irrelevante",
-      reason: "Menos de 2 termos de aderencia no PDF"
+      reason: "Nenhum termo de aderencia identificado no PDF"
     };
   }
 

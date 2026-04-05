@@ -11,6 +11,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
  * @property {string} titulo
  * @property {string} link
  * @property {string} orgao
+ * @property {string} cnpj
  * @property {string | null} data
  * @property {string[]} chaves
  */
@@ -20,7 +21,8 @@ const pncpItemSchema = z.object({
   objetoCompra: z.string().optional().default(""),
   dataPublicacaoPncp: z.string().optional().default(""),
   orgaoEntidade: z.object({
-    razaoSocial: z.string().optional().default("")
+    razaoSocial: z.string().optional().default(""),
+    cnpj: z.string().optional().default("")
   }).optional().default({ razaoSocial: "" }),
   valorTotalEstimado: z.union([z.number(), z.string()]).nullable().optional().default(0),
   linkSistemaOrigem: z.string().optional().default(""),
@@ -54,13 +56,20 @@ function normalizeIncomingItem(item) {
     source.orgao_nome ??
     source.unidadeOrgao?.nomeUnidade ??
     source.unidade_nome;
+  const orgaoCnpj =
+    orgaoEntidade.cnpj ??
+    orgaoEntidade.cnpjBasico ??
+    source.orgao_cnpj ??
+    source.cnpj ??
+    source.cnpjOrgaoEntidade;
 
   return {
     numeroControlePNCP: source.numeroControlePNCP ?? source.numero_controle_pncp,
     objetoCompra: source.objetoCompra ?? source.objeto_compra ?? source.description ?? source.title ?? source.objeto,
     dataPublicacaoPncp: source.dataPublicacaoPncp ?? source.data_publicacao_pncp ?? source.dataPublicacao,
     orgaoEntidade: {
-      razaoSocial
+      razaoSocial,
+      cnpj: String(orgaoCnpj || "")
     },
     valorTotalEstimado: source.valorTotalEstimado ?? source.valor_total_estimado ?? source.valor_global ?? 0,
     linkSistemaOrigem:
@@ -106,7 +115,42 @@ function isValidRawPncpItem(item) {
   );
 }
 
+function sanitizeCnpj(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length === 14 ? digits : "";
+}
+
+function parseControlIdParts(controlId) {
+  const raw = String(controlId || "").trim();
+  if (!raw) return null;
+
+  const slashPattern = raw.match(/^(\d{14})-(\d+)-(\d+)\/(\d{4})$/);
+  if (slashPattern) {
+    return {
+      cnpj: sanitizeCnpj(slashPattern[1]),
+      ano: String(slashPattern[4] || "").replace(/\D/g, ""),
+      sequencial: String(Number(String(slashPattern[3] || "").replace(/\D/g, "")) || "")
+    };
+  }
+
+  const canonicalPattern = raw.match(/^(\d{14})-(\d{4})-(\d+)$/);
+  if (canonicalPattern) {
+    return {
+      cnpj: sanitizeCnpj(canonicalPattern[1]),
+      ano: String(canonicalPattern[2] || "").replace(/\D/g, ""),
+      sequencial: String(Number(String(canonicalPattern[3] || "").replace(/\D/g, "")) || "")
+    };
+  }
+
+  return null;
+}
+
 function resolvePncpUrl(item = {}) {
+  const controlParts = parseControlIdParts(item.numeroControlePNCP);
+  if (controlParts?.cnpj && controlParts?.ano && controlParts?.sequencial) {
+    return `https://pncp.gov.br/app/editais/${controlParts.cnpj}/${controlParts.ano}/${controlParts.sequencial}`;
+  }
+
   const path = item.item_url || item.linkSistemaOrigem || item.linkProcessoEletronico || item.url || "";
   if (!path) return "https://pncp.gov.br/app/editais?pagina=1";
   if (/^https?:\/\//i.test(path)) return path;
@@ -195,6 +239,7 @@ async function fetchByKeyword(keyword, dateFrom, dateTo) {
         titulo: item.objetoCompra || "Sem titulo",
         link: resolvePncpUrl(item),
         orgao: item.orgaoEntidade?.razaoSocial || "Orgao nao informado",
+        cnpj: sanitizeCnpj(item.orgaoEntidade?.cnpj),
         data: date,
         chaves: [keyword]
       };
